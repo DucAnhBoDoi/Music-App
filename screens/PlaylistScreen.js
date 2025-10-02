@@ -23,14 +23,12 @@ export default function PlaylistScreen() {
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Refresh khi màn hình được focus
   useFocusEffect(
     React.useCallback(() => {
       setRefreshKey((prev) => prev + 1);
     }, [])
   );
 
-  // Thêm playlist mới
   const handleAddPlaylist = () => {
     if (!newPlaylistName.trim()) {
       Alert.alert("⚠️ Lỗi", "Tên playlist không được để trống");
@@ -79,7 +77,17 @@ export default function PlaylistScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* Header */}
       <Text style={styles.header}>My Playlist</Text>
+
+      {/* Nút tạo playlist - nằm ngay dưới header, khoảng cách dưới giống card */}
+      <TouchableOpacity
+        style={styles.addButton}
+        onPress={() => setModalVisible(true)}
+      >
+        <Ionicons name="add-circle" size={28} color="#1DB954" />
+        <Text style={styles.addText}>Tạo Playlist mới</Text>
+      </TouchableOpacity>
 
       {playlistNames.length === 0 ? (
         <View style={styles.emptyContainer}>
@@ -97,15 +105,6 @@ export default function PlaylistScreen() {
           showsVerticalScrollIndicator={false}
         />
       )}
-
-      {/* Nút thêm playlist - Fixed position */}
-      <TouchableOpacity
-        style={styles.addButton}
-        onPress={() => setModalVisible(true)}
-      >
-        <Ionicons name="add-circle" size={28} color="#1DB954" />
-        <Text style={styles.addText}>Tạo Playlist mới</Text>
-      </TouchableOpacity>
 
       {/* Modal nhập tên playlist */}
       <Modal
@@ -154,7 +153,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#121212",
     paddingHorizontal: 16,
-    padding: 16,
+    paddingTop: 16,
   },
   header: {
     marginTop: 20,
@@ -215,10 +214,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   addButton: {
-    position: "absolute",
-    bottom: 20,
-    left: 16,
-    right: 16,
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#1e1e1e",
@@ -228,6 +223,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 5,
     elevation: 5,
+    marginBottom: 12, // khoảng cách dưới nút bằng card playlist
   },
   addText: {
     marginLeft: 10,

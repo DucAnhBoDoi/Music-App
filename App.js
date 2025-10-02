@@ -1,5 +1,6 @@
 // App.js
 import React from "react";
+import { View } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -14,6 +15,9 @@ import PlaylistDetailScreen from "./screens/PlaylistDetailScreen";
 import FavoritesScreen from "./screens/FavoritesScreen";
 import PlayerScreen from "./screens/PlayerScreen";
 
+// Import MiniPlayer
+import MiniPlayer from "./components/MiniPlayer";
+
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
@@ -21,52 +25,57 @@ function BottomTabs() {
   const insets = useSafeAreaInsets();
 
   return (
-    <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown: false,
-        tabBarStyle: {
-          backgroundColor: "#1c1c1c",
-          borderTopWidth: 0,
-          height: 60 + insets.bottom,
-          paddingBottom: insets.bottom,
-        },
-        tabBarLabelStyle: {
-          fontSize: 12,
-          marginBottom: 2,
-        },
-        tabBarActiveTintColor: "#1DB954",
-        tabBarInactiveTintColor: "#aaa",
-        tabBarIcon: ({ focused, color }) => {
-          let iconName;
+    <View style={{ flex: 1 }}>
+      <Tab.Navigator
+        screenOptions={({ route }) => ({
+          headerShown: false,
+          tabBarStyle: {
+            backgroundColor: "#1c1c1c",
+            borderTopWidth: 0,
+            height: 60 + insets.bottom,
+            paddingBottom: insets.bottom,
+          },
+          tabBarLabelStyle: {
+            fontSize: 12,
+            marginBottom: 2,
+          },
+          tabBarActiveTintColor: "#1DB954",
+          tabBarInactiveTintColor: "#aaa",
+          tabBarIcon: ({ focused, color }) => {
+            let iconName;
 
-          if (route.name === "Music") {
-            iconName = focused ? "musical-notes" : "musical-notes-outline";
-          } else if (route.name === "Playlist") {
-            iconName = focused ? "list" : "list-outline";
-          } else if (route.name === "Favorites") {
-            iconName = focused ? "heart" : "heart-outline";
-          }
+            if (route.name === "Music") {
+              iconName = focused ? "musical-notes" : "musical-notes-outline";
+            } else if (route.name === "Playlist") {
+              iconName = focused ? "list" : "list-outline";
+            } else if (route.name === "Favorites") {
+              iconName = focused ? "heart" : "heart-outline";
+            }
 
-          return <Ionicons name={iconName} size={24} color={color} />;
-        },
-      })}
-    >
-      <Tab.Screen
-        name="Music"
-        component={MusicListScreen}
-        options={{ tabBarLabel: "My Music" }}
-      />
-      <Tab.Screen
-        name="Playlist"
-        component={PlaylistStack}
-        options={{ tabBarLabel: "Playlist" }}
-      />
-      <Tab.Screen
-        name="Favorites"
-        component={FavoritesScreen}
-        options={{ tabBarLabel: "Favorites" }}
-      />
-    </Tab.Navigator>
+            return <Ionicons name={iconName} size={24} color={color} />;
+          },
+        })}
+      >
+        <Tab.Screen
+          name="Music"
+          component={MusicListScreen}
+          options={{ tabBarLabel: "My Music" }}
+        />
+        <Tab.Screen
+          name="Playlist"
+          component={PlaylistStack}
+          options={{ tabBarLabel: "Playlist" }}
+        />
+        <Tab.Screen
+          name="Favorites"
+          component={FavoritesScreen}
+          options={{ tabBarLabel: "Favorites" }}
+        />
+      </Tab.Navigator>
+
+      {/* Mini Player - Hiển thị trên tab bar */}
+      <MiniPlayer />
+    </View>
   );
 }
 

@@ -1,5 +1,5 @@
 // screens/PlayerScreen.js
-import React, { useState, useEffect, useRef, useContext } from "react";
+import React, { useState, useEffect, useContext } from "react";
 import {
   View,
   Text,
@@ -13,18 +13,38 @@ import {
   TextInput,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { Audio } from "expo-av";
 import Slider from "@react-native-community/slider";
 import MusicPlayerContext from "../context/MusicPlayerContext";
 
 const { width } = Dimensions.get("window");
 
 export default function PlayerScreen({ route, navigation }) {
-  const { song, playlist = [song], currentIndex = 0 } = route.params || {};
+  const { song, playlist = [song], currentIndex: paramIndex = 0 } = route.params || {};
 
   // ========== CONTEXT ==========
   const {
-    favorites,
+    // Playback state từ context
+    currentSong,
+    currentPlaylist,
+    currentIndex,
+    isPlaying,
+    position,
+    duration,
+    repeat,
+    shuffle,
+    
+    // Playback controls
+    playSong,
+    togglePlayPause,
+    playNext,
+    playPrevious,
+    seekTo,
+    setVolume,
+    setRepeat,
+    setShuffle,
+    getSoundRef,
+    
+    // Favorites & Playlists
     toggleFavorite,
     isFavorite,
     playlists,
@@ -33,66 +53,23 @@ export default function PlayerScreen({ route, navigation }) {
     getPlaylistNames,
   } = useContext(MusicPlayerContext);
 
-  const [sound, setSound] = useState();
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [position, setPosition] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [isLoading, setIsLoading] = useState(false);
-  const [currentSongIndex, setCurrentSongIndex] = useState(currentIndex);
-  const [currentSong, setCurrentSong] = useState(playlist[currentIndex] || song);
-
-  const [repeat, setRepeat] = useState("none");
-  const [shuffle, setShuffle] = useState(false);
-  const [volume, setVolume] = useState(1);
+  // Local state cho volume slider
+  const [localVolume, setLocalVolume] = useState(1);
 
   // Modal quản lý playlist
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
   const [showNewPlaylistModal, setShowNewPlaylistModal] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState("");
 
-  const soundRef = useRef();
-  const repeatRef = useRef(repeat);
-  const shuffleRef = useRef(shuffle);
-  const volumeRef = useRef(volume);
-  const currentSongIndexRef = useRef(currentSongIndex);
-  const playlistRef = useRef(playlist);
-
-  // --- SYNC refs ---
+  // ========== INIT: Phát nhạc khi mở PlayerScreen lần đầu ==========
   useEffect(() => {
-    repeatRef.current = repeat;
-  }, [repeat]);
-  useEffect(() => {
-    shuffleRef.current = shuffle;
-  }, [shuffle]);
-  useEffect(() => {
-    volumeRef.current = volume;
-    if (soundRef.current) {
-      soundRef.current.setVolumeAsync(volume).catch(() => {});
+    // Nếu chưa có currentSong hoặc song khác với currentSong
+    if (song && (!currentSong || currentSong.id !== song.id)) {
+      playSong(song, {
+        playlist: playlist,
+        index: paramIndex,
+      });
     }
-  }, [volume]);
-  useEffect(() => {
-    currentSongIndexRef.current = currentSongIndex;
-  }, [currentSongIndex]);
-  useEffect(() => {
-    playlistRef.current = playlist;
-  }, [playlist]);
-
-  // --- Audio setup ---
-  useEffect(() => {
-    Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      staysActiveInBackground: true,
-      playsInSilentModeIOS: true,
-      shouldDuckAndroid: true,
-      interruptionModeAndroid: Audio.INTERRUPTION_MODE_ANDROID_DO_NOT_MIX,
-      playThroughEarpieceAndroid: false,
-    });
-
-    return () => {
-      if (soundRef.current) {
-        soundRef.current.unloadAsync().catch(() => {});
-      }
-    };
   }, []);
 
   // ========== XỬ LÝ THÊM VÀO PLAYLIST ==========
@@ -118,7 +95,6 @@ export default function PlayerScreen({ route, navigation }) {
     const success = createPlaylist(newPlaylistName.trim());
     
     if (success) {
-      // Thêm bài hát hiện tại vào playlist mới
       addToPlaylist(newPlaylistName.trim(), currentSong);
       setShowNewPlaylistModal(false);
       setNewPlaylistName("");
@@ -128,151 +104,22 @@ export default function PlayerScreen({ route, navigation }) {
     }
   };
 
-  // --- Playback status ---
-  const onPlaybackStatusUpdate = (status) => {
-    if (status.isLoaded) {
-      setPosition(status.positionMillis || 0);
-      setDuration(status.durationMillis || 0);
-      setIsPlaying(status.isPlaying);
-
-      if (status.didJustFinish) {
-        if (repeatRef.current === "one") {
-          if (soundRef.current) {
-            soundRef.current.replayAsync().catch(console.log);
-          }
-          return;
-        }
-        const pl = playlistRef.current || [];
-        const len = pl.length;
-        const cur = currentSongIndexRef.current;
-        if (len === 0) return;
-
-        let nextIndex = cur;
-        if (shuffleRef.current) {
-          if (len === 2) nextIndex = cur === 0 ? 1 : 0;
-          else {
-            do {
-              nextIndex = Math.floor(Math.random() * len);
-            } while (nextIndex === cur && len > 1);
-          }
-        } else {
-          if (cur === len - 1) {
-            if (repeatRef.current === "all") nextIndex = 0;
-            else return;
-          } else nextIndex = cur + 1;
-        }
-        setCurrentSongIndex(nextIndex);
-        setCurrentSong(pl[nextIndex]);
-      }
-    } else {
-      setIsPlaying(false);
-    }
-  };
-
-  // --- Load & play ---
-  const loadAndPlaySong = async (songToPlay) => {
-    try {
-      setIsLoading(true);
-      if (soundRef.current) {
-        try {
-          await soundRef.current.unloadAsync();
-        } catch {}
-      }
-      if (!songToPlay || !songToPlay.preview) {
-        Alert.alert("Không có preview", "Bài này không có link phát thử.");
-        setIsLoading(false);
-        return;
-      }
-      const initialVolume = volumeRef.current ?? 1;
-      const { sound: newSound } = await Audio.Sound.createAsync(
-        { uri: songToPlay.preview },
-        { shouldPlay: true, isLooping: false, volume: initialVolume }
-      );
-      newSound.setOnPlaybackStatusUpdate(onPlaybackStatusUpdate);
-      soundRef.current = newSound;
-      setSound(newSound);
-    } catch (e) {
-      console.log("❌ Error load:", e);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (currentSong) {
-      loadAndPlaySong(currentSong);
-    }
-  }, [currentSong]);
-
-  // --- Controls ---
-  const handlePlayPause = async () => {
-    if (!soundRef.current) return;
-    try {
-      const status = await soundRef.current.getStatusAsync();
-      if (status.isLoaded) {
-        if (status.isPlaying) await soundRef.current.pauseAsync();
-        else await soundRef.current.playAsync();
-      }
-    } catch (e) {
-      console.log("Play/Pause error:", e);
-    }
-  };
-
-  const handleNext = () => {
-    const pl = playlistRef.current || [];
-    if (!pl.length) return;
-    let nextIndex = currentSongIndexRef.current;
-    if (shuffleRef.current) {
-      do {
-        nextIndex = Math.floor(Math.random() * pl.length);
-      } while (nextIndex === currentSongIndexRef.current);
-    } else {
-      if (currentSongIndexRef.current === pl.length - 1) {
-        if (repeatRef.current === "all") nextIndex = 0;
-        else return;
-      } else nextIndex = currentSongIndexRef.current + 1;
-    }
-    setCurrentSongIndex(nextIndex);
-    setCurrentSong(pl[nextIndex]);
-  };
-
-  const handlePrevious = () => {
-    const pl = playlistRef.current || [];
-    if (!pl.length) return;
-    let prevIndex = currentSongIndexRef.current;
-    if (shuffleRef.current) {
-      do {
-        prevIndex = Math.floor(Math.random() * pl.length);
-      } while (prevIndex === currentSongIndexRef.current);
-    } else {
-      if (currentSongIndexRef.current === 0) {
-        if (repeatRef.current === "all") prevIndex = pl.length - 1;
-        else {
-          if (soundRef.current) soundRef.current.setPositionAsync(0).catch(() => {});
-          return;
-        }
-      } else prevIndex = currentSongIndexRef.current - 1;
-    }
-    setCurrentSongIndex(prevIndex);
-    setCurrentSong(pl[prevIndex]);
-  };
-
   const handleSeek = async (value) => {
-    if (soundRef.current && duration > 0) {
-      const pos = Math.floor(value * duration);
-      try {
-        await soundRef.current.setPositionAsync(pos);
-      } catch {}
-    }
+    await seekTo(value);
   };
 
-  const toggleRepeat = () => {
+  const handleVolumeChange = (vol) => {
+    setLocalVolume(vol);
+    setVolume(vol);
+  };
+
+  const toggleRepeatMode = () => {
     if (repeat === "none") setRepeat("all");
     else if (repeat === "all") setRepeat("one");
     else setRepeat("none");
   };
 
-  const toggleShuffle = () => setShuffle((prev) => !prev);
+  const toggleShuffleMode = () => setShuffle(!shuffle);
 
   const handleToggleFavorite = () => {
     if (!currentSong) return;
@@ -309,7 +156,7 @@ export default function PlayerScreen({ route, navigation }) {
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Now Playing</Text>
           <Text style={styles.headerSubtitle}>
-            {currentSongIndex + 1} of {playlist.length}
+            {currentIndex + 1} of {currentPlaylist.length}
           </Text>
         </View>
         <View style={styles.headerRight}>
@@ -357,7 +204,7 @@ export default function PlayerScreen({ route, navigation }) {
           onSlidingComplete={handleSeek}
           minimumTrackTintColor="#1DB954"
           maximumTrackTintColor="#404040"
-          disabled={!duration || isLoading}
+          disabled={!duration}
         />
         <View style={styles.timeContainer}>
           <Text style={styles.timeText}>{formatTime(position)}</Text>
@@ -367,27 +214,26 @@ export default function PlayerScreen({ route, navigation }) {
 
       {/* Controls */}
       <View style={styles.controlsContainer}>
-        <TouchableOpacity onPress={toggleShuffle} style={styles.smallControl}>
+        <TouchableOpacity onPress={toggleShuffleMode} style={styles.smallControl}>
           <Ionicons name="shuffle" size={24} color={shuffle ? "#1DB954" : "#aaa"} />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={handlePrevious} style={styles.controlButton}>
+        <TouchableOpacity onPress={playPrevious} style={styles.controlButton}>
           <Ionicons name="play-skip-back" size={35} color="#fff" />
         </TouchableOpacity>
 
         <TouchableOpacity
-          onPress={handlePlayPause}
-          style={[styles.playButton, isLoading && { opacity: 0.5 }]}
-          disabled={isLoading}
+          onPress={togglePlayPause}
+          style={styles.playButton}
         >
           <Ionicons name={isPlaying ? "pause" : "play"} size={35} color="#000" />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={handleNext} style={styles.controlButton}>
+        <TouchableOpacity onPress={playNext} style={styles.controlButton}>
           <Ionicons name="play-skip-forward" size={35} color="#fff" />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={toggleRepeat} style={styles.smallControl}>
+        <TouchableOpacity onPress={toggleRepeatMode} style={styles.smallControl}>
           <View style={styles.repeatContainer}>
             <Ionicons name="repeat" size={24} color={repeat === "none" ? "#aaa" : "#1DB954"} />
             {repeat === "one" && (
@@ -406,8 +252,8 @@ export default function PlayerScreen({ route, navigation }) {
           style={{ flex: 1, marginHorizontal: 10 }}
           minimumValue={0}
           maximumValue={1}
-          value={volume}
-          onValueChange={setVolume}
+          value={localVolume}
+          onValueChange={handleVolumeChange}
           minimumTrackTintColor="#1DB954"
           maximumTrackTintColor="#404040"
           thumbTintColor="#1DB954"

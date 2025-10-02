@@ -1,11 +1,13 @@
 // components/SongItem.js
-import React, { useState } from "react";
+import React, { useState, useContext } from "react";
 import { View, Text, Image, TouchableOpacity, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from '@react-navigation/native';
+import MusicPlayerContext from "../context/MusicPlayerContext";
 
 export default function SongItem({ song, playlist, songIndex }) {
   const navigation = useNavigation();
+  const { playSong } = useContext(MusicPlayerContext);
   const [imageError, setImageError] = useState(false);
 
   // Hàm format thời gian từ giây sang mm:ss
@@ -18,8 +20,15 @@ export default function SongItem({ song, playlist, songIndex }) {
 
   // Hàm xử lý khi bấm play
   const handlePlay = () => {
-    console.log('🎵 Navigating to Player with song:', song.title);
+    console.log('🎵 Playing song:', song.title);
     
+    // Phát nhạc qua context (nhạc sẽ chạy ngay lập tức)
+    playSong(song, {
+      playlist: playlist || [song],
+      index: songIndex || 0
+    });
+
+    // Navigate đến PlayerScreen
     navigation.navigate('Player', {
       song: song,
       playlist: playlist || [song],
