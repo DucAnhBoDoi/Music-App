@@ -1,5 +1,5 @@
 // screens/MusicListScreen.js
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useContext } from "react";
 import {
     View,
     Text,
@@ -11,66 +11,46 @@ import {
     SafeAreaView,
 } from "react-native";
 import SongItem from "../components/SongItem";
+import MusicPlayerContext from "../context/MusicPlayerContext";
 
 export default function MusicListScreen() {
     const [search, setSearch] = useState("");
     const [songsData, setSongsData] = useState([]);
     const [loading, setLoading] = useState(false);
+    const { history } = useContext(MusicPlayerContext); // lấy history để gợi ý
 
     const fetchSongs = async () => {
-        try {
-            setLoading(true);
-            const response = await fetch("https://api.deezer.com/chart/0/tracks?limit=20");
-            const result = await response.json();
+    try {
+        setLoading(true);
+        const response = await fetch("https://api.deezer.com/chart/2/tracks?limit=50");
+        const result = await response.json();
 
-            const formattedSongs = result.data.map((track) => ({
-                id: track.id.toString(),
-                title: track.title,
-                artist: track.artist.name,
-                cover: track.album.cover_medium || track.album.cover_small,
-                duration: track.duration,
-                preview: track.preview,
-            }));
+        const formattedSongs = result.data.map((track) => ({
+            id: track.id.toString(),
+            title: track.title,
+            artist: track.artist.name,
+            cover: track.album.cover_medium || track.album.cover_small,
+            duration: track.duration,
+            preview: track.preview,
+        }));
 
-            setSongsData(formattedSongs);
-        } catch (error) {
-            console.log("Error fetching songs from Deezer:", error);
-            setSongsData([
-                {
-                    id: "1",
-                    title: "Blinding Lights",
-                    artist: "The Weeknd",
-                    cover: "https://cdns-images.dzcdn.net/images/cover/ec3c8ed67427064c70f67e5815b74cef/250x250-000000-80-0-0.jpg",
-                },
-                {
-                    id: "2",
-                    title: "Shape of You",
-                    artist: "Ed Sheeran",
-                    cover: "https://cdns-images.dzcdn.net/images/cover/56d51ebcfaa73fa6fa9b151adc5c57ba/250x250-000000-80-0-0.jpg",
-                },
-                {
-                    id: "3",
-                    title: "Someone Like You",
-                    artist: "Adele",
-                    cover: "https://cdns-images.dzcdn.net/images/cover/2e018122cb56986277102d2041a592c8/250x250-000000-80-0-0.jpg",
-                },
-                {
-                    id: "4",
-                    title: "Bohemian Rhapsody",
-                    artist: "Queen",
-                    cover: "https://cdns-images.dzcdn.net/images/cover/e2b36a9fda865cb2e9ed4e15f6578da9/250x250-000000-80-0-0.jpg",
-                },
-                {
-                    id: "5",
-                    title: "Bad Guy",
-                    artist: "Billie Eilish",
-                    cover: "https://cdns-images.dzcdn.net/images/cover/ec0679956a4e6c0fc79aa4b7b5b2b846/250x250-000000-80-0-0.jpg",
-                },
-            ]);
-        } finally {
-            setLoading(false);
-        }
-    };
+        setSongsData(formattedSongs);
+    } catch (error) {
+        console.log("Error fetching songs from Deezer:", error);
+        setSongsData([
+            {
+                id: "1",
+                title: "Hello",
+                artist: "Adele",
+                cover: "https://cdns-images.dzcdn.net/images/cover/2e018122cb56986277102d2041a592c8/250x250-000000-80-0-0.jpg",
+                preview: "",
+            },
+        ]);
+    } finally {
+        setLoading(false);
+    }
+};
+
 
     const searchSongs = async (query) => {
         if (!query.trim()) {
@@ -106,28 +86,41 @@ export default function MusicListScreen() {
         fetchSongs();
     }, []);
 
+    // debounce 500ms
     useEffect(() => {
         const timeoutId = setTimeout(() => {
-            if (search) {
-                searchSongs(search);
-            } else {
-                fetchSongs();
-            }
+            if (search) searchSongs(search);
+            else fetchSongs();
         }, 500);
         return () => clearTimeout(timeoutId);
     }, [search]);
 
+    const suggestedSongs = history?.slice(0, 5) || [];
+
     return (
         <SafeAreaView style={styles.safeArea}>
-            {/* ✅ StatusBar trên */}
-            <StatusBar
-                barStyle="light-content"
-                backgroundColor="#121212"
-                translucent={true}
-            />
+            <StatusBar barStyle="light-content" backgroundColor="#121212" translucent={true} />
 
             <View style={styles.container}>
                 <Text style={styles.header}>My Music</Text>
+
+                {suggestedSongs.length > 0 && (
+                    <View style={{ marginBottom: 16 }}>
+                        <Text style={styles.subHeader}>Gợi ý cho bạn</Text>
+                        <FlatList
+                            data={suggestedSongs}
+                            horizontal
+                            keyExtractor={(item) => item.id}
+                            renderItem={({ item, index }) => (
+                                <SongItem song={item} playlist={suggestedSongs} songIndex={index} />
+                            )}
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={{ paddingRight: 16 }}  // cách mép phải
+                            ItemSeparatorComponent={() => <View style={{ width: 12 }} />} // khoảng cách giữa các item
+                        />
+
+                    </View>
+                )}
 
                 <TextInput
                     style={styles.searchBar}
@@ -162,7 +155,7 @@ export default function MusicListScreen() {
 const styles = StyleSheet.create({
     safeArea: {
         flex: 1,
-        backgroundColor: "#121212", // phủ cả trên + dưới
+        backgroundColor: "#121212",
     },
     container: {
         flex: 1,
@@ -174,6 +167,12 @@ const styles = StyleSheet.create({
         fontWeight: "bold",
         color: "#fff",
         marginBottom: 12,
+    },
+    subHeader: {
+        fontSize: 20,
+        fontWeight: "bold",
+        color: "#1DB954",
+        marginBottom: 8,
     },
     searchBar: {
         backgroundColor: "#fff",
