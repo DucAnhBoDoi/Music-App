@@ -1,194 +1,336 @@
-// screens/MusicListScreen.js
 import React, { useState, useEffect, useContext } from "react";
 import {
-    View,
-    Text,
-    TextInput,
-    FlatList,
-    StyleSheet,
-    ActivityIndicator,
-    StatusBar,
-    SafeAreaView,
+  View,
+  Text,
+  TextInput,
+  FlatList,
+  StyleSheet,
+  ActivityIndicator,
+  StatusBar,
+  SafeAreaView,
+  TouchableOpacity,
+  Image,
 } from "react-native";
 import SongItem from "../components/SongItem";
 import MusicPlayerContext from "../context/MusicPlayerContext";
 
 export default function MusicListScreen() {
-    const [search, setSearch] = useState("");
-    const [songsData, setSongsData] = useState([]);
-    const [loading, setLoading] = useState(false);
-    const { history } = useContext(MusicPlayerContext); // lấy history để gợi ý
+  const [search, setSearch] = useState("");
+  const [songsData, setSongsData] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [albums, setAlbums] = useState([]);
+  const [artists, setArtists] = useState([]);
+  const [genres, setGenres] = useState([]);
+  const { history } = useContext(MusicPlayerContext);
 
-    const fetchSongs = async () => {
+  // Lấy danh sách nhạc
+  const fetchSongs = async () => {
     try {
-        setLoading(true);
-        const response = await fetch("https://api.deezer.com/chart/2/tracks?limit=50");
-        const result = await response.json();
-
-        const formattedSongs = result.data.map((track) => ({
-            id: track.id.toString(),
-            title: track.title,
-            artist: track.artist.name,
-            cover: track.album.cover_medium || track.album.cover_small,
-            duration: track.duration,
-            preview: track.preview,
-        }));
-
-        setSongsData(formattedSongs);
+      setLoading(true);
+      const response = await fetch("https://api.deezer.com/chart/2/tracks?limit=50");
+      const result = await response.json();
+      const formattedSongs = result.data.map((track) => ({
+        id: track.id.toString(),
+        title: track.title,
+        artist: track.artist.name,
+        cover: track.album.cover_medium || track.album.cover_small,
+        duration: track.duration,
+        preview: track.preview,
+      }));
+      setSongsData(formattedSongs);
     } catch (error) {
-        console.log("Error fetching songs from Deezer:", error);
-        setSongsData([
-            {
-                id: "1",
-                title: "Hello",
-                artist: "Adele",
-                cover: "https://cdns-images.dzcdn.net/images/cover/2e018122cb56986277102d2041a592c8/250x250-000000-80-0-0.jpg",
-                preview: "",
-            },
-        ]);
+      console.log("Error fetching songs:", error);
+      setSongsData([
+        {
+          id: "1",
+          title: "Hello",
+          artist: "Adele",
+          cover:
+            "https://cdns-images.dzcdn.net/images/cover/2e018122cb56986277102d2041a592c8/250x250-000000-80-0-0.jpg",
+          preview: "",
+        },
+      ]);
     } finally {
-        setLoading(false);
+      setLoading(false);
     }
-};
+  };
 
+  // Tìm kiếm nhạc
+  const searchSongs = async (query) => {
+    if (!query.trim()) {
+      fetchSongs();
+      return;
+    }
+    try {
+      setLoading(true);
+      const response = await fetch(
+        `https://api.deezer.com/search?q=${encodeURIComponent(query)}&limit=20`
+      );
+      const result = await response.json();
+      const formattedSongs = result.data.map((track) => ({
+        id: track.id.toString(),
+        title: track.title,
+        artist: track.artist.name,
+        cover: track.album.cover_medium || track.album.cover_small,
+        duration: track.duration,
+        preview: track.preview,
+      }));
+      setSongsData(formattedSongs);
+    } catch (error) {
+      console.log("Error searching songs:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    const searchSongs = async (query) => {
-        if (!query.trim()) {
-            fetchSongs();
-            return;
+  // Lấy Album, Artist, Genre
+  const fetchFilters = async () => {
+    try {
+      const chartRes = await fetch("https://api.deezer.com/chart/0");
+      const chartData = await chartRes.json();
+      setAlbums(chartData.albums?.data || []);
+      setArtists(chartData.artists?.data || []);
+
+      const genreRes = await fetch("https://api.deezer.com/genre");
+      const genreData = await genreRes.json();
+      setGenres(genreData.data.slice(1, 6)); // lấy 5 thể loại
+    } catch (error) {
+      console.log("Error fetching filters:", error);
+    }
+  };
+
+  // Lấy nhạc theo album, artist, genre
+  const fetchFilteredSongs = async (type, id) => {
+    try {
+      setLoading(true);
+      let url = "";
+      if (type === "album") url = `https://api.deezer.com/album/${id}/tracks`;
+      else if (type === "artist") url = `https://api.deezer.com/artist/${id}/top?limit=50`;
+      else if (type === "genre") {
+        const res = await fetch(`https://api.deezer.com/genre/${id}/artists`);
+        const data = await res.json();
+        let tracks = [];
+        for (let artist of data.data.slice(0, 5)) {
+          const resTop = await fetch(`https://api.deezer.com/artist/${artist.id}/top?limit=5`);
+          const topTracks = await resTop.json();
+          tracks.push(
+            ...topTracks.data.map((track) => ({
+              id: track.id.toString(),
+              title: track.title,
+              artist: track.artist.name,
+              cover: track.album.cover_medium,
+              duration: track.duration,
+              preview: track.preview,
+            }))
+          );
         }
+        setSongsData(tracks);
+        return;
+      }
 
-        try {
-            setLoading(true);
-            const response = await fetch(
-                `https://api.deezer.com/search?q=${encodeURIComponent(query)}&limit=20`
-            );
-            const result = await response.json();
+      if (url) {
+        const response = await fetch(url);
+        const result = await response.json();
+        const formattedSongs = result.data.map((track) => ({
+          id: track.id.toString(),
+          title: track.title,
+          artist: track.artist.name,
+          cover: track.album.cover_medium || track.album.cover_small,
+          duration: track.duration,
+          preview: track.preview,
+        }));
+        setSongsData(formattedSongs);
+      }
+    } catch (error) {
+      console.log("Error fetching filtered songs:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-            const formattedSongs = result.data.map((track) => ({
-                id: track.id.toString(),
-                title: track.title,
-                artist: track.artist.name,
-                cover: track.album.cover_medium || track.album.cover_small,
-                duration: track.duration,
-                preview: track.preview,
-            }));
+  useEffect(() => {
+    fetchSongs();
+    fetchFilters();
+  }, []);
 
-            setSongsData(formattedSongs);
-        } catch (error) {
-            console.log("Error searching songs:", error);
-        } finally {
-            setLoading(false);
-        }
-    };
+  // debounce tìm kiếm
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      if (search) searchSongs(search);
+      else fetchSongs();
+    }, 500);
+    return () => clearTimeout(timeoutId);
+  }, [search]);
 
-    useEffect(() => {
-        fetchSongs();
-    }, []);
+  const suggestedSongs = history?.slice(0, 5) || [];
 
-    // debounce 500ms
-    useEffect(() => {
-        const timeoutId = setTimeout(() => {
-            if (search) searchSongs(search);
-            else fetchSongs();
-        }, 500);
-        return () => clearTimeout(timeoutId);
-    }, [search]);
-
-    const suggestedSongs = history?.slice(0, 5) || [];
-
-    return (
-        <SafeAreaView style={styles.safeArea}>
-            <StatusBar barStyle="light-content" backgroundColor="#121212" translucent={true} />
-
-            <View style={styles.container}>
-                <Text style={styles.header}>My Music</Text>
-
-                {suggestedSongs.length > 0 && (
-                    <View style={{ marginBottom: 16 }}>
-                        <Text style={styles.subHeader}>Gợi ý cho bạn</Text>
-                        <FlatList
-                            data={suggestedSongs}
-                            horizontal
-                            keyExtractor={(item) => item.id}
-                            renderItem={({ item, index }) => (
-                                <SongItem song={item} playlist={suggestedSongs} songIndex={index} />
-                            )}
-                            showsHorizontalScrollIndicator={false}
-                            contentContainerStyle={{ paddingRight: 16 }}  // cách mép phải
-                            ItemSeparatorComponent={() => <View style={{ width: 12 }} />} // khoảng cách giữa các item
-                        />
-
-                    </View>
-                )}
-
-                <TextInput
-                    style={styles.searchBar}
-                    placeholder="Tìm bài hát hoặc ca sĩ..."
-                    placeholderTextColor="#555"
-                    value={search}
-                    onChangeText={setSearch}
-                />
-
-                {loading ? (
-                    <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color="#fff" />
-                        <Text style={styles.loadingText}>Đang tải nhạc...</Text>
-                    </View>
-                ) : (
-                    <FlatList
-                        data={songsData}
-                        keyExtractor={(item) => item.id}
-                        renderItem={({ item, index }) => (
-                            <SongItem song={item} playlist={songsData} songIndex={index} />
-                        )}
-                        showsVerticalScrollIndicator={false}
-                        onRefresh={fetchSongs}
-                        refreshing={loading}
-                    />
-                )}
+  // Render từng section
+  const renderSection = ({ item }) => {
+    switch (item.type) {
+      case "suggested":
+        return (
+          <View style={{ marginBottom: 16 }}>
+            <Text style={styles.subHeader}>Gợi ý cho bạn</Text>
+            <FlatList
+              data={suggestedSongs}
+              horizontal
+              keyExtractor={(item) => item.id}
+              renderItem={({ item, index }) => (
+                <SongItem song={item} playlist={suggestedSongs} songIndex={index} />
+              )}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingRight: 16 }}
+              ItemSeparatorComponent={() => <View style={{ width: 12 }} />}
+            />
+          </View>
+        );
+      case "genres":
+        return (
+          <View style={{ marginBottom: 16 }}>
+            <Text style={styles.subHeader}>Thể loại</Text>
+            <FlatList
+              data={genres}
+              horizontal
+              keyExtractor={(item) => item.id.toString()}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  onPress={() => fetchFilteredSongs("genre", item.id)}
+                  style={styles.genreButton}
+                >
+                  <Text style={{ color: "#fff" }}>{item.name}</Text>
+                </TouchableOpacity>
+              )}
+              showsHorizontalScrollIndicator={false}
+            />
+          </View>
+        );
+      case "songs":
+        if (loading) {
+          return (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#fff" />
+              <Text style={styles.loadingText}>Đang tải nhạc...</Text>
             </View>
-        </SafeAreaView>
-    );
+          );
+        }
+        return (
+          <FlatList
+            data={songsData}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item, index }) => (
+              <SongItem song={item} playlist={songsData} songIndex={index} />
+            )}
+            scrollEnabled={false} // chỉ FlatList tổng cuộn
+          />
+        );
+      case "albums":
+        return (
+          <View style={{ marginBottom: 16 }}>
+            <Text style={styles.subHeader}>Album</Text>
+            <FlatList
+              data={albums}
+              horizontal
+              keyExtractor={(item) => item.id.toString()}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  onPress={() => fetchFilteredSongs("album", item.id)}
+                  style={{ marginRight: 12 }}
+                >
+                  <Image source={{ uri: item.cover_medium }} style={styles.albumCover} />
+                  <Text style={styles.filterText} numberOfLines={1}>
+                    {item.title}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              showsHorizontalScrollIndicator={false}
+            />
+          </View>
+        );
+      case "artists":
+        return (
+          <View style={{ marginBottom: 16 }}>
+            <Text style={styles.subHeader}>Ca sĩ</Text>
+            <FlatList
+              data={artists}
+              horizontal
+              keyExtractor={(item) => item.id.toString()}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  onPress={() => fetchFilteredSongs("artist", item.id)}
+                  style={{ marginRight: 12 }}
+                >
+                  <Image source={{ uri: item.picture_medium }} style={styles.artistCover} />
+                  <Text style={styles.filterText} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              showsHorizontalScrollIndicator={false}
+            />
+          </View>
+        );
+      default:
+        return null;
+    }
+  };
+
+  // Sắp xếp section: Suggested + Genres → Songs → Albums → Artists
+  const flatListData = [
+    suggestedSongs.length > 0 ? { type: "suggested" } : null,
+    genres.length > 0 ? { type: "genres" } : null,
+    { type: "songs" },
+    albums.length > 0 ? { type: "albums" } : null,
+    artists.length > 0 ? { type: "artists" } : null,
+  ].filter(Boolean);
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="light-content" backgroundColor="#121212" translucent={true} />
+
+      {/* Header + Search cố định */}
+      <View style={styles.headerContainer}>
+        <Text style={styles.header}>My Music</Text>
+        <TextInput
+          style={styles.searchBar}
+          placeholder="Tìm bài hát hoặc ca sĩ..."
+          placeholderTextColor="#555"
+          value={search}
+          onChangeText={setSearch}
+        />
+      </View>
+
+      {/* Nội dung cuộn */}
+      <FlatList
+        data={flatListData}
+        keyExtractor={(item, index) => item.type + index}
+        renderItem={renderSection}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{
+          paddingHorizontal: 16,
+          paddingTop: 16,
+          paddingBottom: 32,
+        }}
+      />
+    </SafeAreaView>
+  );
 }
 
 const styles = StyleSheet.create({
-    safeArea: {
-        flex: 1,
-        backgroundColor: "#121212",
-    },
-    container: {
-        flex: 1,
-        padding: 16,
-    },
-    header: {
-        marginTop: 20,
-        fontSize: 28,
-        fontWeight: "bold",
-        color: "#fff",
-        marginBottom: 12,
-    },
-    subHeader: {
-        fontSize: 20,
-        fontWeight: "bold",
-        color: "#1DB954",
-        marginBottom: 8,
-    },
-    searchBar: {
-        backgroundColor: "#fff",
-        borderRadius: 12,
-        padding: 10,
-        marginBottom: 16,
-        color: "#000",
-    },
-    loadingContainer: {
-        flex: 1,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    loadingText: {
-        color: "#fff",
-        marginTop: 10,
-        fontSize: 16,
-    },
+  safeArea: { flex: 1, backgroundColor: "#121212" },
+  headerContainer: { paddingHorizontal: 16, paddingTop: 16, backgroundColor: "#121212", zIndex: 1 },
+  header: { fontSize: 28, fontWeight: "bold", color: "#fff", marginBottom: 12, marginTop: 20 },
+  subHeader: { fontSize: 20, fontWeight: "bold", color: "#1DB954", marginBottom: 8 },
+  searchBar: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 16,
+    color: "#000",
+  },
+  loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center", marginVertical: 20 },
+  loadingText: { color: "#fff", marginTop: 10, fontSize: 16 },
+  albumCover: { width: 100, height: 100, borderRadius: 8 },
+  artistCover: { width: 80, height: 80, borderRadius: 40 },
+  filterText: { color: "#fff", marginTop: 4, width: 100, textAlign: "center" },
+  genreButton: { backgroundColor: "#1DB954", paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20, marginRight: 12 },
 });

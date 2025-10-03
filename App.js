@@ -1,11 +1,12 @@
 // App.js
-import React from "react";
-import { View } from "react-native";
+import React, { useEffect } from "react";
+import { View, AppState, StatusBar } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { MusicPlayerProvider } from "./context/MusicPlayerContext";
 
 // Screens
@@ -23,7 +24,6 @@ import MiniPlayer from "./components/MiniPlayer";
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-// Stack Navigator cho Playlist
 function PlaylistStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -33,7 +33,6 @@ function PlaylistStack() {
   );
 }
 
-// Bottom Tabs
 function BottomTabs() {
   const insets = useSafeAreaInsets();
 
@@ -57,7 +56,7 @@ function BottomTabs() {
             else if (route.name === "Playlist") iconName = focused ? "list" : "list-outline";
             else if (route.name === "Favorites") iconName = focused ? "heart" : "heart-outline";
             else if (route.name === "Trending") iconName = focused ? "trending-up" : "trending-up-outline";
-            else if (route.name === "History") iconName = focused ? "person" : "person-outline";
+            else if (route.name === "History") iconName = focused ? "time" : "time-outline";
             return <Ionicons name={iconName} size={24} color={color} />;
           },
         })}
@@ -76,16 +75,30 @@ function BottomTabs() {
 }
 
 export default function App() {
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        // reset status bar khi quay lại app (fix tràn màu xuống navigation bar)
+        StatusBar.setBackgroundColor("#000");
+        StatusBar.setBarStyle("light-content");
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   return (
-    <SafeAreaProvider>
-      <MusicPlayerProvider>
-        <NavigationContainer>
-          <Stack.Navigator screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="HomeTabs" component={BottomTabs} />
-            <Stack.Screen name="Player" component={PlayerScreen} />
-          </Stack.Navigator>
-        </NavigationContainer>
-      </MusicPlayerProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <MusicPlayerProvider>
+          <StatusBar barStyle="light-content" backgroundColor="#000" />
+          <NavigationContainer>
+            <Stack.Navigator screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="HomeTabs" component={BottomTabs} />
+              <Stack.Screen name="Player" component={PlayerScreen} />
+            </Stack.Navigator>
+          </NavigationContainer>
+        </MusicPlayerProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

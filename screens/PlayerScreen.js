@@ -11,19 +11,23 @@ import {
   Modal,
   FlatList,
   TextInput,
+  Share,
+  Platform,
+  Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import Slider from "@react-native-community/slider";
+import * as FileSystem from "expo-file-system";
+import * as MediaLibrary from "expo-media-library";
 import MusicPlayerContext from "../context/MusicPlayerContext";
 
-const { width } = Dimensions.get("window");
+const { width, height } = Dimensions.get("window");
 
 export default function PlayerScreen({ route, navigation }) {
   const { song, playlist = [song], currentIndex: paramIndex = 0 } = route.params || {};
 
   // ========== CONTEXT ==========
   const {
-    // Playback state từ context
     currentSong,
     currentPlaylist,
     currentIndex,
@@ -33,7 +37,6 @@ export default function PlayerScreen({ route, navigation }) {
     repeat,
     shuffle,
     
-    // Playback controls
     playSong,
     togglePlayPause,
     playNext,
@@ -44,7 +47,6 @@ export default function PlayerScreen({ route, navigation }) {
     setShuffle,
     getSoundRef,
     
-    // Favorites & Playlists
     toggleFavorite,
     isFavorite,
     playlists,
@@ -53,17 +55,16 @@ export default function PlayerScreen({ route, navigation }) {
     getPlaylistNames,
   } = useContext(MusicPlayerContext);
 
-  // Local state cho volume slider
+  // Local state
   const [localVolume, setLocalVolume] = useState(1);
-
-  // Modal quản lý playlist
+  const [showBottomSheet, setShowBottomSheet] = useState(false);
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
   const [showNewPlaylistModal, setShowNewPlaylistModal] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState("");
+  const [isDownloading, setIsDownloading] = useState(false);
 
-  // ========== INIT: Phát nhạc khi mở PlayerScreen lần đầu ==========
+  // ========== INIT ==========
   useEffect(() => {
-    // Nếu chưa có currentSong hoặc song khác với currentSong
     if (song && (!currentSong || currentSong.id !== song.id)) {
       playSong(song, {
         playlist: playlist,
@@ -72,7 +73,90 @@ export default function PlayerScreen({ route, navigation }) {
     }
   }, []);
 
-  // ========== XỬ LÝ THÊM VÀO PLAYLIST ==========
+  // ========== SHARE FUNCTION ==========
+  const handleShare = async () => {
+    if (!currentSong) return;
+
+    try {
+      const message = `🎵 ${currentSong.title}\n👤 ${currentSong.artist}\n\n🎧 Nghe ngay: ${currentSong.link || 'https://www.deezer.com'}`;
+      
+      const result = await Share.share({
+        message: message,
+        title: `Chia sẻ: ${currentSong.title}`,
+      }, {
+        dialogTitle: 'Chia sẻ bài hát',
+        subject: `${currentSong.title} - ${currentSong.artist}`,
+      });
+
+      if (result.action === Share.sharedAction) {
+        if (result.activityType) {
+          console.log('Đã chia sẻ qua:', result.activityType);
+        } else {
+          console.log('Đã chia sẻ');
+        }
+        setShowBottomSheet(false);
+        Alert.alert('✅ Thành công', 'Đã chia sẻ bài hát!');
+      }
+    } catch (error) {
+      console.log('Share error:', error);
+      Alert.alert('❌ Lỗi', 'Không thể chia sẻ bài hát');
+    }
+  };
+
+  // ========== DOWNLOAD FUNCTION ==========
+  const handleDownload = async () => {
+    if (!currentSong || !currentSong.preview) {
+      Alert.alert('❌ Lỗi', 'Không có link tải về');
+      return;
+    }
+
+    try {
+      // Request permission
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('⚠️ Cần quyền truy cập', 'Vui lòng cấp quyền truy cập thư viện để tải nhạc');
+        return;
+      }
+
+      setIsDownloading(true);
+      setShowBottomSheet(false);
+
+      // Create file name
+      const fileName = `${currentSong.title.replace(/[^a-z0-9]/gi, '_')}.mp3`;
+      const fileUri = FileSystem.documentDirectory + fileName;
+
+      // Download
+      Alert.alert('⏳ Đang tải...', 'Vui lòng đợi');
+
+      const downloadResumable = FileSystem.createDownloadResumable(
+        currentSong.preview,
+        fileUri,
+        {},
+        (downloadProgress) => {
+          const progress = downloadProgress.totalBytesWritten / downloadProgress.totalBytesExpectedToWrite;
+          console.log(`Download progress: ${(progress * 100).toFixed(0)}%`);
+        }
+      );
+
+      const { uri } = await downloadResumable.downloadAsync();
+      
+      // Save to media library
+      await MediaLibrary.createAssetAsync(uri);
+
+      setIsDownloading(false);
+      Alert.alert(
+        '✅ Tải xuống thành công!',
+        `Bài hát "${currentSong.title}" đã được lưu vào thư viện của bạn`,
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      setIsDownloading(false);
+      console.log('Download error:', error);
+      Alert.alert('❌ Lỗi', 'Không thể tải bài hát. Đây là bản preview 30s nên có thể không hỗ trợ tải về.');
+    }
+  };
+
+  // ========== PLAYLIST FUNCTIONS ==========
   const handleAddToPlaylist = (playlistName) => {
     if (!currentSong) return;
     
@@ -159,18 +243,9 @@ export default function PlayerScreen({ route, navigation }) {
             {currentIndex + 1} of {currentPlaylist.length}
           </Text>
         </View>
-        <View style={styles.headerRight}>
-          <TouchableOpacity onPress={() => setShowPlaylistModal(true)} style={{ marginRight: 15 }}>
-            <Ionicons name="add-circle-outline" size={26} color="#1DB954" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={handleToggleFavorite}>
-            <Ionicons
-              name={isFavorite(currentSong.id) ? "heart" : "heart-outline"}
-              size={26}
-              color="red"
-            />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity onPress={() => setShowBottomSheet(true)}>
+          <Ionicons name="ellipsis-vertical" size={24} color="#fff" />
+        </TouchableOpacity>
       </View>
 
       {/* Album Art */}
@@ -260,6 +335,108 @@ export default function PlayerScreen({ route, navigation }) {
         />
         <Ionicons name="volume-high" size={20} color="#aaa" />
       </View>
+
+      {/* Bottom Sheet Menu (Spotify Style) */}
+      <Modal
+        visible={showBottomSheet}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowBottomSheet(false)}
+      >
+        <TouchableOpacity 
+          style={styles.bottomSheetOverlay}
+          activeOpacity={1}
+          onPress={() => setShowBottomSheet(false)}
+        >
+          <TouchableOpacity 
+            activeOpacity={1} 
+            style={styles.bottomSheetContainer}
+            onPress={(e) => e.stopPropagation()}
+          >
+            {/* Song Header */}
+            <View style={styles.bottomSheetHeader}>
+              <Image source={{ uri: currentSong.cover }} style={styles.bottomSheetImage} />
+              <View style={styles.bottomSheetInfo}>
+                <Text style={styles.bottomSheetTitle} numberOfLines={1}>
+                  {currentSong.title}
+                </Text>
+                <Text style={styles.bottomSheetArtist} numberOfLines={1}>
+                  {currentSong.artist}
+                </Text>
+              </View>
+            </View>
+
+            {/* Divider */}
+            <View style={styles.divider} />
+
+            {/* Menu Items */}
+            <View style={styles.menuContainer}>
+              {/* Favorite */}
+              <TouchableOpacity 
+                style={styles.menuItem}
+                onPress={() => {
+                  handleToggleFavorite();
+                  setShowBottomSheet(false);
+                }}
+              >
+                <Ionicons 
+                  name={isFavorite(currentSong.id) ? "heart" : "heart-outline"} 
+                  size={24} 
+                  color={isFavorite(currentSong.id) ? "#1DB954" : "#fff"} 
+                />
+                <Text style={styles.menuText}>
+                  {isFavorite(currentSong.id) ? "Xóa khỏi yêu thích" : "Thêm vào yêu thích"}
+                </Text>
+              </TouchableOpacity>
+
+              {/* Add to Playlist */}
+              <TouchableOpacity 
+                style={styles.menuItem}
+                onPress={() => {
+                  setShowBottomSheet(false);
+                  setTimeout(() => setShowPlaylistModal(true), 300);
+                }}
+              >
+                <Ionicons name="list" size={24} color="#fff" />
+                <Text style={styles.menuText}>Thêm vào playlist</Text>
+              </TouchableOpacity>
+
+              {/* Share */}
+              <TouchableOpacity 
+                style={styles.menuItem}
+                onPress={handleShare}
+              >
+                <Ionicons name="share-social" size={24} color="#fff" />
+                <Text style={styles.menuText}>Chia sẻ</Text>
+              </TouchableOpacity>
+
+              {/* Download */}
+              <TouchableOpacity 
+                style={styles.menuItem}
+                onPress={handleDownload}
+                disabled={isDownloading}
+              >
+                <Ionicons 
+                  name={isDownloading ? "hourglass" : "download"} 
+                  size={24} 
+                  color="#fff" 
+                />
+                <Text style={styles.menuText}>
+                  {isDownloading ? "Đang tải..." : "Tải xuống"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Close Button */}
+            <TouchableOpacity 
+              style={styles.closeButton}
+              onPress={() => setShowBottomSheet(false)}
+            >
+              <Text style={styles.closeButtonText}>Đóng</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Modal chọn playlist */}
       <Modal visible={showPlaylistModal} transparent animationType="slide">
@@ -380,10 +557,6 @@ const styles = StyleSheet.create({
   },
   headerTitle: { color: "#fff", fontSize: 16, fontWeight: "600" },
   headerSubtitle: { color: "#666", fontSize: 12 },
-  headerRight: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
   albumContainer: { alignItems: "center", marginVertical: 30 },
   albumArt: {
     width: width * 0.75,
@@ -444,14 +617,97 @@ const styles = StyleSheet.create({
   },
   errorText: { color: "#fff", textAlign: "center", marginTop: 20 },
   backButton: { color: "#1DB954", textAlign: "center", marginTop: 10 },
+
+  // Bottom Sheet Styles
+  bottomSheetOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    justifyContent: "flex-end",
+  },
+  bottomSheetContainer: {
+    backgroundColor: "#282828",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 30,
+  },
+  bottomSheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 20,
+  },
+  bottomSheetImage: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    backgroundColor: "#333",
+  },
+  bottomSheetInfo: {
+    flex: 1,
+    marginLeft: 15,
+  },
+  bottomSheetTitle: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  bottomSheetArtist: {
+    color: "#aaa",
+    fontSize: 14,
+    marginTop: 4,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: "#404040",
+    marginHorizontal: 20,
+  },
+  menuContainer: {
+    paddingTop: 10,
+  },
+  menuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+  },
+  menuText: {
+    color: "#fff",
+    fontSize: 16,
+    marginLeft: 20,
+  },
+  closeButton: {
+    marginTop: 10,
+    marginHorizontal: 20,
+    padding: 15,
+    backgroundColor: "#1c1c1c",
+    borderRadius: 25,
+    alignItems: "center",
+  },
+  closeButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+
+  // Modal Styles
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.6)",
     justifyContent: "center",
     alignItems: "center",
   },
-  modalBox: { backgroundColor: "#222", padding: 20, borderRadius: 12, width: "80%", maxHeight: "70%" },
-  modalTitle: { color: "#fff", fontSize: 18, fontWeight: "600", marginBottom: 12 },
+  modalBox: { 
+    backgroundColor: "#222", 
+    padding: 20, 
+    borderRadius: 12, 
+    width: "80%", 
+    maxHeight: "70%" 
+  },
+  modalTitle: { 
+    color: "#fff", 
+    fontSize: 18, 
+    fontWeight: "600", 
+    marginBottom: 12 
+  },
   playlistItem: {
     flexDirection: "row",
     alignItems: "center",
@@ -459,7 +715,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#333",
   },
-  modalClose: { marginTop: 15, alignItems: "center", padding: 10 },
+  modalClose: { 
+    marginTop: 15, 
+    alignItems: "center", 
+    padding: 10 
+  },
   newPlaylistBtn: {
     flexDirection: "row",
     alignItems: "center",
