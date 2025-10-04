@@ -1,5 +1,5 @@
-// screens/PlayerScreen.js
-import React, { useState, useEffect, useContext } from "react";
+// screens/PlayerScreen.js - OPTIMIZED VERSION
+import React, { useState, useEffect, useContext, useRef, useMemo, useCallback } from "react";
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import {
   TextInput,
   Share,
   Platform,
-  Linking,
+  Animated,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import Slider from "@react-native-community/slider";
@@ -45,7 +45,6 @@ export default function PlayerScreen({ route, navigation }) {
     setVolume,
     setRepeat,
     setShuffle,
-    getSoundRef,
     
     toggleFavorite,
     isFavorite,
@@ -55,13 +54,74 @@ export default function PlayerScreen({ route, navigation }) {
     getPlaylistNames,
   } = useContext(MusicPlayerContext);
 
-  // Local state
+  // ========== ANIMATIONS ==========
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const imageOpacity = useRef(new Animated.Value(1)).current;
+
+  // ========== LOCAL STATE ==========
   const [localVolume, setLocalVolume] = useState(1);
   const [showBottomSheet, setShowBottomSheet] = useState(false);
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
   const [showNewPlaylistModal, setShowNewPlaylistModal] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [isDownloading, setIsDownloading] = useState(false);
+  
+  // Track previous song for transition detection
+  const prevSongId = useRef(currentSong?.id);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [currentImageUri, setCurrentImageUri] = useState(currentSong?.cover);
+
+  // ========== MEMOIZED VALUES ==========
+  const playlistNames = useMemo(() => getPlaylistNames(), [playlists]);
+  
+  const formattedPosition = useMemo(() => formatTime(position), [position]);
+  const formattedDuration = useMemo(() => formatTime(duration), [duration]);
+  
+  const sliderValue = useMemo(() => {
+    return duration ? position / duration : 0;
+  }, [position, duration]);
+
+  // ========== IMAGE PRELOADING ==========
+  useEffect(() => {
+    if (currentSong?.cover && currentSong.cover !== currentImageUri) {
+      setImageLoaded(false);
+      
+      // Preload image
+      Image.prefetch(currentSong.cover)
+        .then(() => {
+          setCurrentImageUri(currentSong.cover);
+          setImageLoaded(true);
+        })
+        .catch(() => {
+          setCurrentImageUri(currentSong.cover);
+          setImageLoaded(true);
+        });
+    }
+  }, [currentSong?.cover]);
+
+  // ========== SMOOTH TRANSITION EFFECT ==========
+  useEffect(() => {
+    if (currentSong && prevSongId.current !== currentSong.id) {
+      prevSongId.current = currentSong.id;
+      
+      // Smooth cross-fade when image changes
+      if (currentSong.cover !== currentImageUri) {
+        setImageLoaded(false);
+      }
+    }
+  }, [currentSong?.id]);
+
+  // Animate when image loads
+  useEffect(() => {
+    if (imageLoaded) {
+      Animated.timing(imageOpacity, {
+        toValue: 1,
+        duration: 250,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [imageLoaded]);
 
   // ========== INIT ==========
   useEffect(() => {
@@ -73,8 +133,40 @@ export default function PlayerScreen({ route, navigation }) {
     }
   }, []);
 
+  // ========== OPTIMIZED CALLBACKS ==========
+  const handleSeek = useCallback(async (value) => {
+    await seekTo(value);
+  }, [seekTo]);
+
+  const handleVolumeChange = useCallback((vol) => {
+    setLocalVolume(vol);
+    setVolume(vol);
+  }, [setVolume]);
+
+  const toggleRepeatMode = useCallback(() => {
+    if (repeat === "none") setRepeat("all");
+    else if (repeat === "all") setRepeat("one");
+    else setRepeat("none");
+  }, [repeat, setRepeat]);
+
+  const toggleShuffleMode = useCallback(() => setShuffle(!shuffle), [shuffle, setShuffle]);
+
+  const handleToggleFavorite = useCallback(() => {
+    if (!currentSong) return;
+    toggleFavorite(currentSong);
+  }, [currentSong, toggleFavorite]);
+
+  // Quick navigation without affecting album art
+  const handlePlayNext = useCallback(() => {
+    playNext();
+  }, [playNext]);
+
+  const handlePlayPrevious = useCallback(() => {
+    playPrevious();
+  }, [playPrevious]);
+
   // ========== SHARE FUNCTION ==========
-  const handleShare = async () => {
+  const handleShare = useCallback(async () => {
     if (!currentSong) return;
 
     try {
@@ -89,11 +181,6 @@ export default function PlayerScreen({ route, navigation }) {
       });
 
       if (result.action === Share.sharedAction) {
-        if (result.activityType) {
-          console.log('Đã chia sẻ qua:', result.activityType);
-        } else {
-          console.log('Đã chia sẻ');
-        }
         setShowBottomSheet(false);
         Alert.alert('✅ Thành công', 'Đã chia sẻ bài hát!');
       }
@@ -101,17 +188,16 @@ export default function PlayerScreen({ route, navigation }) {
       console.log('Share error:', error);
       Alert.alert('❌ Lỗi', 'Không thể chia sẻ bài hát');
     }
-  };
+  }, [currentSong]);
 
   // ========== DOWNLOAD FUNCTION ==========
-  const handleDownload = async () => {
+  const handleDownload = useCallback(async () => {
     if (!currentSong || !currentSong.preview) {
       Alert.alert('❌ Lỗi', 'Không có link tải về');
       return;
     }
 
     try {
-      // Request permission
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('⚠️ Cần quyền truy cập', 'Vui lòng cấp quyền truy cập thư viện để tải nhạc');
@@ -121,11 +207,9 @@ export default function PlayerScreen({ route, navigation }) {
       setIsDownloading(true);
       setShowBottomSheet(false);
 
-      // Create file name
       const fileName = `${currentSong.title.replace(/[^a-z0-9]/gi, '_')}.mp3`;
       const fileUri = FileSystem.documentDirectory + fileName;
 
-      // Download
       Alert.alert('⏳ Đang tải...', 'Vui lòng đợi');
 
       const downloadResumable = FileSystem.createDownloadResumable(
@@ -139,8 +223,6 @@ export default function PlayerScreen({ route, navigation }) {
       );
 
       const { uri } = await downloadResumable.downloadAsync();
-      
-      // Save to media library
       await MediaLibrary.createAssetAsync(uri);
 
       setIsDownloading(false);
@@ -154,10 +236,10 @@ export default function PlayerScreen({ route, navigation }) {
       console.log('Download error:', error);
       Alert.alert('❌ Lỗi', 'Không thể tải bài hát. Đây là bản preview 30s nên có thể không hỗ trợ tải về.');
     }
-  };
+  }, [currentSong]);
 
   // ========== PLAYLIST FUNCTIONS ==========
-  const handleAddToPlaylist = (playlistName) => {
+  const handleAddToPlaylist = useCallback((playlistName) => {
     if (!currentSong) return;
     
     const success = addToPlaylist(playlistName, currentSong);
@@ -168,9 +250,9 @@ export default function PlayerScreen({ route, navigation }) {
     } else {
       Alert.alert("⚠️ Thông báo", "Bài hát đã có trong playlist này rồi!");
     }
-  };
+  }, [currentSong, addToPlaylist]);
 
-  const handleCreateNewPlaylist = () => {
+  const handleCreateNewPlaylist = useCallback(() => {
     if (!newPlaylistName.trim()) {
       Alert.alert("⚠️ Lỗi", "Tên playlist không được để trống");
       return;
@@ -186,36 +268,22 @@ export default function PlayerScreen({ route, navigation }) {
     } else {
       Alert.alert("⚠️ Lỗi", "Playlist này đã tồn tại!");
     }
-  };
+  }, [newPlaylistName, currentSong, createPlaylist, addToPlaylist]);
 
-  const handleSeek = async (value) => {
-    await seekTo(value);
-  };
-
-  const handleVolumeChange = (vol) => {
-    setLocalVolume(vol);
-    setVolume(vol);
-  };
-
-  const toggleRepeatMode = () => {
-    if (repeat === "none") setRepeat("all");
-    else if (repeat === "all") setRepeat("one");
-    else setRepeat("none");
-  };
-
-  const toggleShuffleMode = () => setShuffle(!shuffle);
-
-  const handleToggleFavorite = () => {
-    if (!currentSong) return;
-    toggleFavorite(currentSong);
-  };
-
-  const formatTime = (ms) => {
-    if (!ms) return "0:00";
-    const m = Math.floor(ms / 60000);
-    const s = Math.floor((ms % 60000) / 1000);
-    return `${m}:${s < 10 ? "0" : ""}${s}`;
-  };
+  // ========== RENDER HELPERS ==========
+  const renderPlaylistItem = useCallback(({ item }) => (
+    <TouchableOpacity
+      style={styles.playlistItem}
+      onPress={() => handleAddToPlaylist(item)}
+      activeOpacity={0.7}
+    >
+      <Ionicons name="musical-notes" size={20} color="#1DB954" />
+      <Text style={styles.playlistItemText}>{item}</Text>
+      <Text style={styles.playlistItemCount}>
+        {playlists[item]?.length || 0} bài
+      </Text>
+    </TouchableOpacity>
+  ), [playlists, handleAddToPlaylist]);
 
   if (!currentSong) {
     return (
@@ -228,13 +296,11 @@ export default function PlayerScreen({ route, navigation }) {
     );
   }
 
-  const playlistNames = getPlaylistNames();
-
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <TouchableOpacity onPress={() => navigation.goBack()} activeOpacity={0.7}>
           <Ionicons name="chevron-down" size={28} color="#fff" />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
@@ -243,20 +309,37 @@ export default function PlayerScreen({ route, navigation }) {
             {currentIndex + 1} of {currentPlaylist.length}
           </Text>
         </View>
-        <TouchableOpacity onPress={() => setShowBottomSheet(true)}>
+        <TouchableOpacity onPress={() => setShowBottomSheet(true)} activeOpacity={0.7}>
           <Ionicons name="ellipsis-vertical" size={24} color="#fff" />
         </TouchableOpacity>
       </View>
 
-      {/* Album Art */}
+      {/* Album Art with smooth transition */}
       <View style={styles.albumContainer}>
-        <Image
-          source={{ uri: currentSong.cover }}
-          style={styles.albumArt}
-          defaultSource={{
-            uri: "https://via.placeholder.com/300x300/333/666?text=Music",
-          }}
-        />
+        <Animated.View 
+          style={[
+            styles.albumArt,
+            {
+              opacity: imageLoaded ? imageOpacity : 0.6,
+            }
+          ]}
+        >
+          {/* Show previous image or placeholder while loading */}
+          {!imageLoaded && currentImageUri && (
+            <Image
+              source={{ uri: currentImageUri }}
+              style={[styles.albumArt, { position: 'absolute' }]}
+            />
+          )}
+          
+          {/* New image */}
+          <Image
+            source={{ uri: currentSong.cover }}
+            style={styles.albumArt}
+            onLoad={() => setImageLoaded(true)}
+            onError={() => setImageLoaded(true)}
+          />
+        </Animated.View>
       </View>
 
       {/* Song Info */}
@@ -275,40 +358,58 @@ export default function PlayerScreen({ route, navigation }) {
           style={styles.slider}
           minimumValue={0}
           maximumValue={1}
-          value={duration ? position / duration : 0}
+          value={sliderValue}
           onSlidingComplete={handleSeek}
           minimumTrackTintColor="#1DB954"
           maximumTrackTintColor="#404040"
+          thumbTintColor="#1DB954"
           disabled={!duration}
         />
         <View style={styles.timeContainer}>
-          <Text style={styles.timeText}>{formatTime(position)}</Text>
-          <Text style={styles.timeText}>{formatTime(duration)}</Text>
+          <Text style={styles.timeText}>{formattedPosition}</Text>
+          <Text style={styles.timeText}>{formattedDuration}</Text>
         </View>
       </View>
 
       {/* Controls */}
       <View style={styles.controlsContainer}>
-        <TouchableOpacity onPress={toggleShuffleMode} style={styles.smallControl}>
+        <TouchableOpacity 
+          onPress={toggleShuffleMode} 
+          style={styles.smallControl}
+          activeOpacity={0.7}
+        >
           <Ionicons name="shuffle" size={24} color={shuffle ? "#1DB954" : "#aaa"} />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={playPrevious} style={styles.controlButton}>
+        <TouchableOpacity 
+          onPress={handlePlayPrevious} 
+          style={styles.controlButton}
+          activeOpacity={0.7}
+        >
           <Ionicons name="play-skip-back" size={35} color="#fff" />
         </TouchableOpacity>
 
         <TouchableOpacity
           onPress={togglePlayPause}
           style={styles.playButton}
+          activeOpacity={0.8}
         >
           <Ionicons name={isPlaying ? "pause" : "play"} size={35} color="#000" />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={playNext} style={styles.controlButton}>
+        <TouchableOpacity 
+          onPress={handlePlayNext} 
+          style={styles.controlButton}
+          activeOpacity={0.7}
+        >
           <Ionicons name="play-skip-forward" size={35} color="#fff" />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={toggleRepeatMode} style={styles.smallControl}>
+        <TouchableOpacity 
+          onPress={toggleRepeatMode} 
+          style={styles.smallControl}
+          activeOpacity={0.7}
+        >
           <View style={styles.repeatContainer}>
             <Ionicons name="repeat" size={24} color={repeat === "none" ? "#aaa" : "#1DB954"} />
             {repeat === "one" && (
@@ -336,7 +437,7 @@ export default function PlayerScreen({ route, navigation }) {
         <Ionicons name="volume-high" size={20} color="#aaa" />
       </View>
 
-      {/* Bottom Sheet Menu (Spotify Style) */}
+      {/* Bottom Sheet Menu */}
       <Modal
         visible={showBottomSheet}
         transparent
@@ -353,7 +454,6 @@ export default function PlayerScreen({ route, navigation }) {
             style={styles.bottomSheetContainer}
             onPress={(e) => e.stopPropagation()}
           >
-            {/* Song Header */}
             <View style={styles.bottomSheetHeader}>
               <Image source={{ uri: currentSong.cover }} style={styles.bottomSheetImage} />
               <View style={styles.bottomSheetInfo}>
@@ -366,18 +466,16 @@ export default function PlayerScreen({ route, navigation }) {
               </View>
             </View>
 
-            {/* Divider */}
             <View style={styles.divider} />
 
-            {/* Menu Items */}
             <View style={styles.menuContainer}>
-              {/* Favorite */}
               <TouchableOpacity 
                 style={styles.menuItem}
                 onPress={() => {
                   handleToggleFavorite();
                   setShowBottomSheet(false);
                 }}
+                activeOpacity={0.7}
               >
                 <Ionicons 
                   name={isFavorite(currentSong.id) ? "heart" : "heart-outline"} 
@@ -389,32 +487,32 @@ export default function PlayerScreen({ route, navigation }) {
                 </Text>
               </TouchableOpacity>
 
-              {/* Add to Playlist */}
               <TouchableOpacity 
                 style={styles.menuItem}
                 onPress={() => {
                   setShowBottomSheet(false);
                   setTimeout(() => setShowPlaylistModal(true), 300);
                 }}
+                activeOpacity={0.7}
               >
                 <Ionicons name="list" size={24} color="#fff" />
                 <Text style={styles.menuText}>Thêm vào playlist</Text>
               </TouchableOpacity>
 
-              {/* Share */}
               <TouchableOpacity 
                 style={styles.menuItem}
                 onPress={handleShare}
+                activeOpacity={0.7}
               >
                 <Ionicons name="share-social" size={24} color="#fff" />
                 <Text style={styles.menuText}>Chia sẻ</Text>
               </TouchableOpacity>
 
-              {/* Download */}
               <TouchableOpacity 
                 style={styles.menuItem}
                 onPress={handleDownload}
                 disabled={isDownloading}
+                activeOpacity={0.7}
               >
                 <Ionicons 
                   name={isDownloading ? "hourglass" : "download"} 
@@ -427,10 +525,10 @@ export default function PlayerScreen({ route, navigation }) {
               </TouchableOpacity>
             </View>
 
-            {/* Close Button */}
             <TouchableOpacity 
               style={styles.closeButton}
               onPress={() => setShowBottomSheet(false)}
+              activeOpacity={0.7}
             >
               <Text style={styles.closeButtonText}>Đóng</Text>
             </TouchableOpacity>
@@ -455,6 +553,7 @@ export default function PlayerScreen({ route, navigation }) {
                     setShowPlaylistModal(false);
                     setShowNewPlaylistModal(true);
                   }}
+                  activeOpacity={0.7}
                 >
                   <Ionicons name="add-circle" size={20} color="#1DB954" />
                   <Text style={{ color: "#1DB954", marginLeft: 8 }}>Tạo playlist mới</Text>
@@ -465,19 +564,11 @@ export default function PlayerScreen({ route, navigation }) {
                 <FlatList
                   data={playlistNames}
                   keyExtractor={(item) => item}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity
-                      style={styles.playlistItem}
-                      onPress={() => handleAddToPlaylist(item)}
-                    >
-                      <Ionicons name="musical-notes" size={20} color="#1DB954" />
-                      <Text style={{ color: "#fff", marginLeft: 12, flex: 1 }}>{item}</Text>
-                      <Text style={{ color: "#666", fontSize: 12 }}>
-                        {playlists[item]?.length || 0} bài
-                      </Text>
-                    </TouchableOpacity>
-                  )}
+                  renderItem={renderPlaylistItem}
                   style={{ maxHeight: 300 }}
+                  removeClippedSubviews={true}
+                  maxToRenderPerBatch={10}
+                  windowSize={5}
                 />
                 <TouchableOpacity
                   style={[styles.newPlaylistBtn, { marginTop: 10 }]}
@@ -485,6 +576,7 @@ export default function PlayerScreen({ route, navigation }) {
                     setShowPlaylistModal(false);
                     setShowNewPlaylistModal(true);
                   }}
+                  activeOpacity={0.7}
                 >
                   <Ionicons name="add-circle" size={20} color="#1DB954" />
                   <Text style={{ color: "#1DB954", marginLeft: 8 }}>Tạo playlist mới</Text>
@@ -495,6 +587,7 @@ export default function PlayerScreen({ route, navigation }) {
             <TouchableOpacity
               style={styles.modalClose}
               onPress={() => setShowPlaylistModal(false)}
+              activeOpacity={0.7}
             >
               <Text style={{ color: "#aaa" }}>Đóng</Text>
             </TouchableOpacity>
@@ -522,12 +615,14 @@ export default function PlayerScreen({ route, navigation }) {
                   setShowNewPlaylistModal(false);
                   setNewPlaylistName("");
                 }}
+                activeOpacity={0.7}
               >
                 <Text style={{ color: "#fff" }}>Hủy</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: "#1DB954", flex: 1 }]}
                 onPress={handleCreateNewPlaylist}
+                activeOpacity={0.7}
               >
                 <Text style={{ color: "#fff", fontWeight: "600" }}>Tạo</Text>
               </TouchableOpacity>
@@ -537,6 +632,14 @@ export default function PlayerScreen({ route, navigation }) {
       </Modal>
     </View>
   );
+}
+
+// Helper function
+function formatTime(ms) {
+  if (!ms) return "0:00";
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  return `${m}:${s < 10 ? "0" : ""}${s}`;
 }
 
 const styles = StyleSheet.create({
@@ -562,7 +665,7 @@ const styles = StyleSheet.create({
     width: width * 0.75,
     height: width * 0.75,
     borderRadius: 20,
-    backgroundColor: "#333",
+    backgroundColor: "#222",
   },
   songInfo: { alignItems: "center", marginBottom: 30 },
   songTitle: { color: "#fff", fontSize: 20, fontWeight: "700", textAlign: "center" },
@@ -617,8 +720,6 @@ const styles = StyleSheet.create({
   },
   errorText: { color: "#fff", textAlign: "center", marginTop: 20 },
   backButton: { color: "#1DB954", textAlign: "center", marginTop: 10 },
-
-  // Bottom Sheet Styles
   bottomSheetOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.7)",
@@ -687,8 +788,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
   },
-
-  // Modal Styles
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.6)",
@@ -714,6 +813,15 @@ const styles = StyleSheet.create({
     padding: 12,
     borderBottomWidth: 1,
     borderBottomColor: "#333",
+  },
+  playlistItemText: {
+    color: "#fff",
+    marginLeft: 12,
+    flex: 1,
+  },
+  playlistItemCount: {
+    color: "#666",
+    fontSize: 12,
   },
   modalClose: { 
     marginTop: 15, 
