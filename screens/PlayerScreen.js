@@ -1,4 +1,4 @@
-// screens/PlayerScreen.js - OPTIMIZED VERSION
+// screens/PlayerScreen.js - WITH LYRICS SUPPORT
 import React, { useState, useEffect, useContext, useRef, useMemo, useCallback } from "react";
 import {
   View,
@@ -14,6 +14,8 @@ import {
   Share,
   Platform,
   Animated,
+  ScrollView,
+  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import Slider from "@react-native-community/slider";
@@ -55,8 +57,6 @@ export default function PlayerScreen({ route, navigation }) {
   } = useContext(MusicPlayerContext);
 
   // ========== ANIMATIONS ==========
-  const fadeAnim = useRef(new Animated.Value(1)).current;
-  const scaleAnim = useRef(new Animated.Value(1)).current;
   const imageOpacity = useRef(new Animated.Value(1)).current;
 
   // ========== LOCAL STATE ==========
@@ -67,10 +67,22 @@ export default function PlayerScreen({ route, navigation }) {
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [isDownloading, setIsDownloading] = useState(false);
   
+  // ========== LYRICS STATE ==========
+  const [showLyrics, setShowLyrics] = useState(false);
+  const [lyrics, setLyrics] = useState(null); // { text, synced, syncedLyrics: [{time, text}] }
+  const [loadingLyrics, setLoadingLyrics] = useState(false);
+  const [lyricsError, setLyricsError] = useState(null);
+  
   // Track previous song for transition detection
   const prevSongId = useRef(currentSong?.id);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [currentImageUri, setCurrentImageUri] = useState(currentSong?.cover);
+
+  // Scroll ref for lyrics auto-scroll
+  const lyricsScrollRef = useRef(null);
+
+  // Estimated single-line height (used for auto-scroll). Tune if needed.
+  const LINE_ESTIMATED_HEIGHT = 52;
 
   // ========== MEMOIZED VALUES ==========
   const playlistNames = useMemo(() => getPlaylistNames(), [playlists]);
@@ -109,6 +121,13 @@ export default function PlayerScreen({ route, navigation }) {
       if (currentSong.cover !== currentImageUri) {
         setImageLoaded(false);
       }
+      
+      // Reset lyrics when song changes
+      setLyrics(null);
+      setLyricsError(null);
+      if (showLyrics) {
+        fetchLyrics(currentSong);
+      }
     }
   }, [currentSong?.id]);
 
@@ -131,12 +150,166 @@ export default function PlayerScreen({ route, navigation }) {
         index: paramIndex,
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ========== OPTIMIZED CALLBACKS ==========
+  // ========== LYRICS FETCHING ==========
+  const fetchLyrics = async (songToFetch) => {
+    if (!songToFetch) return;
+    
+    setLoadingLyrics(true);
+    setLyricsError(null);
+
+    try {
+      // Try multiple lyrics APIs
+      const artist = encodeURIComponent(songToFetch.artist || "");
+      const title = encodeURIComponent(songToFetch.title || "");
+
+      // Option 1: lyrics.ovh (Free, no API key) - plain lyrics
+      let response = await fetch(`https://api.lyrics.ovh/v1/${artist}/${title}`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.lyrics) {
+          setLyrics({
+            text: data.lyrics,
+            synced: false,
+          });
+          setLoadingLyrics(false);
+          return;
+        }
+      }
+
+      // Option 2: lrclib.net (Free, possible synced lyrics)
+      response = await fetch(
+        `https://lrclib.net/api/get?artist_name=${artist}&track_name=${title}`
+      );
+      
+      if (response.ok) {
+        const data = await response.json();
+        // lrclib returns plainLyrics and maybe syncedLyrics (LRC)
+        if (data.syncedLyrics) {
+          const parsed = parseLRC(data.syncedLyrics);
+          setLyrics({
+            text: data.plainLyrics || data.syncedLyrics,
+            synced: true,
+            syncedLyrics: parsed,
+          });
+          setLoadingLyrics(false);
+          return;
+        } else if (data.plainLyrics) {
+          setLyrics({
+            text: data.plainLyrics,
+            synced: false,
+          });
+          setLoadingLyrics(false);
+          return;
+        }
+      }
+
+      // No lyrics found
+      setLyricsError("Không tìm thấy lời bài hát");
+      setLoadingLyrics(false);
+    } catch (error) {
+      console.log("Lyrics fetch error:", error);
+      setLyricsError("Lỗi khi tải lời bài hát");
+      setLoadingLyrics(false);
+    }
+  };
+
+  // Parse LRC format for synced lyrics
+  const parseLRC = (lrcText) => {
+    if (!lrcText) return [];
+    const lines = lrcText.split('\n');
+    const parsed = [];
+    
+    lines.forEach(line => {
+      // Support multiple time tags per line [mm:ss.xx][mm:ss.xx]text
+      const timeTagRegex = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g;
+      let match;
+      const text = line.replace(timeTagRegex, '').trim();
+      const times = [];
+      while ((match = timeTagRegex.exec(line)) !== null) {
+        const minutes = parseInt(match[1], 10);
+        const seconds = parseInt(match[2], 10);
+        const msPart = match[3] ? match[3].padEnd(3, '0') : '000';
+        const milliseconds = parseInt(msPart, 10);
+        const timeMs = (minutes * 60 + seconds) * 1000 + milliseconds;
+        times.push(timeMs);
+      }
+      times.forEach(t => {
+        if (text) {
+          parsed.push({ time: t, text });
+        }
+      });
+    });
+    
+    return parsed.sort((a, b) => a.time - b.time);
+  };
+
+  // Get current lyrics line index
+  const getCurrentLyricsIndex = () => {
+    if (!lyrics?.synced || !lyrics.syncedLyrics || lyrics.syncedLyrics.length === 0) return -1;
+    
+    for (let i = lyrics.syncedLyrics.length - 1; i >= 0; i--) {
+      if (position >= lyrics.syncedLyrics[i].time) {
+        return i;
+      }
+    }
+    return -1;
+  };
+
+  // Auto-scroll effect: when position changes and lyrics are visible & synced
+  useEffect(() => {
+    if (!showLyrics) return;
+    if (!lyrics?.synced || !lyrics.syncedLyrics) return;
+
+    const idx = getCurrentLyricsIndex();
+    if (idx < 0) return;
+
+    // scroll to approx y
+    if (lyricsScrollRef.current && typeof lyricsScrollRef.current.scrollTo === 'function') {
+      const y = Math.max(0, idx * LINE_ESTIMATED_HEIGHT - (height * 0.25));
+      lyricsScrollRef.current.scrollTo({ y, animated: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [position, lyrics, showLyrics]);
+
+  const handleToggleLyrics = () => {
+    if (!showLyrics && !lyrics && !loadingLyrics) {
+      // fetch lyrics for currentSong
+      fetchLyrics(currentSong);
+    }
+    setShowLyrics((v) => {
+      const newV = !v;
+      // if toggled on and lyrics not loaded, fetch
+      if (newV && !lyrics && !loadingLyrics) {
+        fetchLyrics(currentSong);
+      }
+      return newV;
+    });
+  };
+
+  // Seek to a normalized value (seekTo expects fraction 0..1 in your context)
   const handleSeek = useCallback(async (value) => {
-    await seekTo(value);
-  }, [seekTo]);
+    if (!duration) return;
+    try {
+      await seekTo(value); // value is 0..1 as used elsewhere in your code
+    } catch (e) {
+      console.log("seek error", e);
+    }
+  }, [seekTo, duration]);
+
+  // Seek to a time in ms (from lyrics). Convert to fraction.
+  const handleSeekToMillis = useCallback(async (ms) => {
+    if (!duration || !seekTo) return;
+    const fraction = Math.max(0, Math.min(1, ms / duration));
+    try {
+      await seekTo(fraction);
+    } catch (e) {
+      console.log("seekToMillis error", e);
+    }
+  }, [seekTo, duration]);
 
   const handleVolumeChange = useCallback((vol) => {
     setLocalVolume(vol);
@@ -217,7 +390,7 @@ export default function PlayerScreen({ route, navigation }) {
         fileUri,
         {},
         (downloadProgress) => {
-          const progress = downloadProgress.totalBytesWritten / downloadProgress.totalBytesExpectedToWrite;
+          const progress = downloadProgress.totalBytesWritten / (downloadProgress.totalBytesExpectedToWrite || 1);
           console.log(`Download progress: ${(progress * 100).toFixed(0)}%`);
         }
       );
@@ -285,6 +458,55 @@ export default function PlayerScreen({ route, navigation }) {
     </TouchableOpacity>
   ), [playlists, handleAddToPlaylist]);
 
+  // Render synced lyrics
+  const renderSyncedLyrics = () => {
+    if (!lyrics?.synced || !lyrics.syncedLyrics) return null;
+    
+    const currentIndex = getCurrentLyricsIndex();
+    
+    return (
+      <ScrollView
+        ref={lyricsScrollRef}
+        style={styles.lyricsScroll}
+        contentContainerStyle={styles.lyricsContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {lyrics.syncedLyrics.map((line, index) => (
+          <TouchableOpacity
+            key={index}
+            onPress={() => handleSeekToMillis(line.time)}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[
+                styles.lyricsLine,
+                index === currentIndex && styles.lyricsLineActive,
+                index < currentIndex && styles.lyricsLinePast,
+              ]}
+            >
+              {line.text}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    );
+  };
+
+  // Render plain lyrics
+  const renderPlainLyrics = () => {
+    if (!lyrics?.text) return null;
+    
+    return (
+      <ScrollView
+        style={styles.lyricsScroll}
+        contentContainerStyle={styles.lyricsContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.lyricsText}>{lyrics.text}</Text>
+      </ScrollView>
+    );
+  };
+
   if (!currentSong) {
     return (
       <View style={styles.container}>
@@ -314,43 +536,101 @@ export default function PlayerScreen({ route, navigation }) {
         </TouchableOpacity>
       </View>
 
-      {/* Album Art with smooth transition */}
-      <View style={styles.albumContainer}>
-        <Animated.View 
-          style={[
-            styles.albumArt,
-            {
-              opacity: imageLoaded ? imageOpacity : 0.6,
-            }
-          ]}
-        >
-          {/* Show previous image or placeholder while loading */}
-          {!imageLoaded && currentImageUri && (
-            <Image
-              source={{ uri: currentImageUri }}
-              style={[styles.albumArt, { position: 'absolute' }]}
-            />
-          )}
-          
-          {/* New image */}
-          <Image
-            source={{ uri: currentSong.cover }}
-            style={styles.albumArt}
-            onLoad={() => setImageLoaded(true)}
-            onError={() => setImageLoaded(true)}
-          />
-        </Animated.View>
-      </View>
+      {/* Main Content */}
+      {!showLyrics ? (
+        <>
+          {/* Album Art with smooth transition */}
+          <View style={styles.albumContainer}>
+            <Animated.View 
+              style={[
+                styles.albumArt,
+                {
+                  opacity: imageLoaded ? imageOpacity : 0.6,
+                }
+              ]}
+            >
+              {/* Show previous image or placeholder while loading */}
+              {!imageLoaded && currentImageUri && (
+                <Image
+                  source={{ uri: currentImageUri }}
+                  style={[styles.albumArt, { position: 'absolute' }]}
+                />
+              )}
+              
+              {/* New image */}
+              <Image
+                source={{ uri: currentSong.cover }}
+                style={styles.albumArt}
+                onLoad={() => setImageLoaded(true)}
+                onError={() => setImageLoaded(true)}
+              />
+            </Animated.View>
+          </View>
 
-      {/* Song Info */}
-      <View style={styles.songInfo}>
-        <Text style={styles.songTitle} numberOfLines={2}>
-          {currentSong.title}
+          {/* Song Info */}
+          <View style={styles.songInfo}>
+            <Text style={styles.songTitle} numberOfLines={2}>
+              {currentSong.title}
+            </Text>
+            <Text style={styles.artistName} numberOfLines={1}>
+              {currentSong.artist}
+            </Text>
+          </View>
+        </>
+      ) : (
+        /* Lyrics View */
+        <View style={styles.lyricsContainer}>
+          <View style={styles.lyricsSongInfo}>
+            <Image source={{ uri: currentSong.cover }} style={styles.lyricsAlbumArt} />
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.lyricsSongTitle} numberOfLines={1}>
+                {currentSong.title}
+              </Text>
+              <Text style={styles.lyricsArtistName} numberOfLines={1}>
+                {currentSong.artist}
+              </Text>
+            </View>
+          </View>
+
+          {loadingLyrics ? (
+            <View style={styles.lyricsLoading}>
+              <ActivityIndicator size="large" color="#1DB954" />
+              <Text style={styles.lyricsLoadingText}>Đang tải lời bài hát...</Text>
+            </View>
+          ) : lyricsError ? (
+            <View style={styles.lyricsError}>
+              <Ionicons name="musical-note-outline" size={60} color="#666" />
+              <Text style={styles.lyricsErrorText}>{lyricsError}</Text>
+              <TouchableOpacity
+                style={styles.retryButton}
+                onPress={() => fetchLyrics(currentSong)}
+              >
+                <Text style={styles.retryButtonText}>Thử lại</Text>
+              </TouchableOpacity>
+            </View>
+          ) : lyrics?.synced ? (
+            renderSyncedLyrics()
+          ) : (
+            renderPlainLyrics()
+          )}
+        </View>
+      )}
+
+      {/* Lyrics Toggle Button */}
+      <TouchableOpacity 
+        style={styles.lyricsToggle}
+        onPress={handleToggleLyrics}
+        activeOpacity={0.7}
+      >
+        <Ionicons 
+          name={showLyrics ? "musical-note" : "musical-note-outline"} 
+          size={20} 
+          color={showLyrics ? "#1DB954" : "#fff"} 
+        />
+        <Text style={[styles.lyricsToggleText, showLyrics && { color: "#1DB954" }]}>
+          {showLyrics ? "Ẩn lời" : "Lời bài hát"}
         </Text>
-        <Text style={styles.artistName} numberOfLines={1}>
-          {currentSong.artist}
-        </Text>
-      </View>
+      </TouchableOpacity>
 
       {/* Progress */}
       <View style={styles.progressContainer}>
@@ -585,11 +865,11 @@ export default function PlayerScreen({ route, navigation }) {
             )}
 
             <TouchableOpacity
-              style={styles.modalClose}
+              style={[styles.modalBtn, { marginTop: 12, backgroundColor: "#444" }]}
               onPress={() => setShowPlaylistModal(false)}
               activeOpacity={0.7}
             >
-              <Text style={{ color: "#aaa" }}>Đóng</Text>
+              <Text style={{ color: "#fff" }}>Đóng</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -636,7 +916,7 @@ export default function PlayerScreen({ route, navigation }) {
 
 // Helper function
 function formatTime(ms) {
-  if (!ms) return "0:00";
+  if (!ms && ms !== 0) return "0:00";
   const m = Math.floor(ms / 60000);
   const s = Math.floor((ms % 60000) / 1000);
   return `${m}:${s < 10 ? "0" : ""}${s}`;
@@ -667,9 +947,112 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     backgroundColor: "#222",
   },
-  songInfo: { alignItems: "center", marginBottom: 30 },
+  songInfo: { alignItems: "center", marginBottom: 20 },
   songTitle: { color: "#fff", fontSize: 20, fontWeight: "700", textAlign: "center" },
   artistName: { color: "#aaa", fontSize: 16, marginTop: 4 },
+  
+  // Lyrics Styles
+  lyricsContainer: {
+    flex: 1,
+    marginTop: 10,
+  },
+  lyricsSongInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 20,
+    paddingBottom: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: "#333",
+  },
+  lyricsAlbumArt: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    backgroundColor: "#333",
+  },
+  lyricsSongTitle: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  lyricsArtistName: {
+    color: "#aaa",
+    fontSize: 14,
+    marginTop: 4,
+  },
+  lyricsScroll: {
+    flex: 1,
+  },
+  lyricsContent: {
+    paddingVertical: 20,
+    paddingHorizontal: 10,
+  },
+  lyricsText: {
+    color: "#fff",
+    fontSize: 16,
+    lineHeight: 28,
+    textAlign: "center",
+  },
+  lyricsLine: {
+    color: "#666",
+    fontSize: 18,
+    lineHeight: 36,
+    textAlign: "center",
+    marginVertical: 8,
+  },
+  lyricsLineActive: {
+    color: "#1DB954",
+    fontSize: 22,
+    fontWeight: "700",
+  },
+  lyricsLinePast: {
+    color: "#888",
+  },
+  lyricsLoading: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  lyricsLoadingText: {
+    color: "#aaa",
+    marginTop: 15,
+    fontSize: 14,
+  },
+  lyricsError: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  lyricsErrorText: {
+    color: "#aaa",
+    marginTop: 15,
+    fontSize: 14,
+  },
+  retryButton: {
+    marginTop: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    backgroundColor: "#1DB954",
+    borderRadius: 20,
+  },
+  retryButtonText: {
+    color: "#fff",
+    fontWeight: "600",
+  },
+  lyricsToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 8,
+    marginBottom: 5,
+  },
+  lyricsToggleText: {
+    color: "#fff",
+    marginLeft: 8,
+    fontSize: 14,
+    fontWeight: "500",
+  },
+  
   progressContainer: { marginHorizontal: 10 },
   slider: { width: "100%", height: 40 },
   timeContainer: { flexDirection: "row", justifyContent: "space-between" },
