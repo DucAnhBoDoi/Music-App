@@ -239,7 +239,8 @@ export default function PlayerScreen({ route, navigation }) {
 
   // Get current lyrics line index
   const getCurrentLyricsIndex = useCallback(() => {
-    if (!lyrics?.synced || !lyrics.syncedLyrics || lyrics.syncedLyrics.length === 0) return -1;
+    if (!lyrics?.syncedLyrics || lyrics.syncedLyrics.length === 0) return -1;
+
 
     // Find the last line that should be playing now
     let currentIdx = -1;
@@ -254,7 +255,7 @@ export default function PlayerScreen({ route, navigation }) {
 
   // Auto-scroll effect: when position changes and lyrics are synced
   useEffect(() => {
-    if (!lyrics?.synced || !lyrics.syncedLyrics || lyrics.syncedLyrics.length === 0) return;
+    if (!lyrics?.syncedLyrics || lyrics.syncedLyrics.length === 0) return;
 
     const idx = getCurrentLyricsIndex();
     if (idx < 0) return;
@@ -458,28 +459,16 @@ export default function PlayerScreen({ route, navigation }) {
         showsVerticalScrollIndicator={false}
         nestedScrollEnabled={true}
       >
-        {lyrics.syncedLyrics.map((line, index) => {
-          const isActive = index === currentIndex;
-          const isPast = index < currentIndex;
+        {lyrics.syncedLyrics.map((line, index) => (
+          <TouchableOpacity
+            key={`${line.time}-${index}`}
+            onPress={() => handleSeekToMillis(line.time)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.lyricsLine}>{line.text}</Text>
+          </TouchableOpacity>
+        ))}
 
-          return (
-            <TouchableOpacity
-              key={`${line.time}-${index}`}
-              onPress={() => handleSeekToMillis(line.time)}
-              activeOpacity={0.7}
-            >
-              <Animated.Text
-                style={[
-                  styles.lyricsLine,
-                  isActive && styles.lyricsLineActive,
-                  isPast && styles.lyricsLinePast,
-                ]}
-              >
-                {line.text}
-              </Animated.Text>
-            </TouchableOpacity>
-          );
-        })}
         {/* Add bottom padding for better scroll experience */}
         <View style={{ height: 150 }} />
       </ScrollView>
@@ -666,7 +655,7 @@ export default function PlayerScreen({ route, navigation }) {
           {lyrics?.synced && (
             <View style={styles.syncedIndicator}>
               <Ionicons name="musical-notes" size={14} color="#1DB954" />
-              <Text style={styles.syncedText}>Lời bài hát đồng bộ</Text>
+              <Text style={styles.syncedText}>Lời bài hát</Text>
             </View>
           )}
 
@@ -984,16 +973,6 @@ const styles = StyleSheet.create({
     marginVertical: 14,
     paddingHorizontal: 10,
     transition: "all 0.3s ease",
-  },
-  lyricsLineActive: {
-    color: "#1DB954",
-    fontSize: 22,
-    fontWeight: "700",
-    transform: [{ scale: 1.08 }],
-  },
-  lyricsLinePast: {
-    color: "#444",
-    fontSize: 15,
   },
   lyricsLoading: {
     flex: 1,
