@@ -1,4 +1,4 @@
-// screens/PlayerScreen.js - WITH LYRICS SUPPORT
+// screens/PlayerScreen.js - WITH LYRICS BOTTOM LAYOUT
 import React, { useState, useEffect, useContext, useRef, useMemo, useCallback } from "react";
 import {
   View,
@@ -38,7 +38,7 @@ export default function PlayerScreen({ route, navigation }) {
     duration,
     repeat,
     shuffle,
-    
+
     playSong,
     togglePlayPause,
     playNext,
@@ -47,7 +47,7 @@ export default function PlayerScreen({ route, navigation }) {
     setVolume,
     setRepeat,
     setShuffle,
-    
+
     toggleFavorite,
     isFavorite,
     playlists,
@@ -66,13 +66,12 @@ export default function PlayerScreen({ route, navigation }) {
   const [showNewPlaylistModal, setShowNewPlaylistModal] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [isDownloading, setIsDownloading] = useState(false);
-  
+
   // ========== LYRICS STATE ==========
-  const [showLyrics, setShowLyrics] = useState(false);
   const [lyrics, setLyrics] = useState(null); // { text, synced, syncedLyrics: [{time, text}] }
   const [loadingLyrics, setLoadingLyrics] = useState(false);
   const [lyricsError, setLyricsError] = useState(null);
-  
+
   // Track previous song for transition detection
   const prevSongId = useRef(currentSong?.id);
   const [imageLoaded, setImageLoaded] = useState(false);
@@ -81,15 +80,15 @@ export default function PlayerScreen({ route, navigation }) {
   // Scroll ref for lyrics auto-scroll
   const lyricsScrollRef = useRef(null);
 
-  // Estimated single-line height (used for auto-scroll). Tune if needed.
-  const LINE_ESTIMATED_HEIGHT = 52;
+  // Estimated single-line height for smooth scrolling
+  const LINE_ESTIMATED_HEIGHT = 60;
 
   // ========== MEMOIZED VALUES ==========
   const playlistNames = useMemo(() => getPlaylistNames(), [playlists]);
-  
+
   const formattedPosition = useMemo(() => formatTime(position), [position]);
   const formattedDuration = useMemo(() => formatTime(duration), [duration]);
-  
+
   const sliderValue = useMemo(() => {
     return duration ? position / duration : 0;
   }, [position, duration]);
@@ -98,7 +97,7 @@ export default function PlayerScreen({ route, navigation }) {
   useEffect(() => {
     if (currentSong?.cover && currentSong.cover !== currentImageUri) {
       setImageLoaded(false);
-      
+
       // Preload image
       Image.prefetch(currentSong.cover)
         .then(() => {
@@ -116,18 +115,16 @@ export default function PlayerScreen({ route, navigation }) {
   useEffect(() => {
     if (currentSong && prevSongId.current !== currentSong.id) {
       prevSongId.current = currentSong.id;
-      
+
       // Smooth cross-fade when image changes
       if (currentSong.cover !== currentImageUri) {
         setImageLoaded(false);
       }
-      
-      // Reset lyrics when song changes
+
+      // Auto-fetch lyrics when song changes
       setLyrics(null);
       setLyricsError(null);
-      if (showLyrics) {
-        fetchLyrics(currentSong);
-      }
+      fetchLyrics(currentSong);
     }
   }, [currentSong?.id]);
 
@@ -154,75 +151,68 @@ export default function PlayerScreen({ route, navigation }) {
   }, []);
 
   // ========== LYRICS FETCHING ==========
+  // ========== LYRICS FETCHING OPTIMIZED ==========
   const fetchLyrics = async (songToFetch) => {
     if (!songToFetch) return;
-    
+
     setLoadingLyrics(true);
     setLyricsError(null);
 
+    const artist = encodeURIComponent(songToFetch.artist || "");
+    const title = encodeURIComponent(songToFetch.title || "");
+
+    const lyricsAPIs = [
+      // lyrics.ovh
+      async () => {
+        const res = await fetch(`https://api.lyrics.ovh/v1/${artist}/${title}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.lyrics) {
+            return { text: data.lyrics, synced: false };
+          }
+        }
+        throw new Error("No lyrics from lyrics.ovh");
+      },
+      // lrclib.net
+      async () => {
+        const res = await fetch(
+          `https://lrclib.net/api/get?artist_name=${artist}&track_name=${title}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.syncedLyrics) {
+            return {
+              text: data.plainLyrics || data.syncedLyrics,
+              synced: true,
+              syncedLyrics: parseLRC(data.syncedLyrics),
+            };
+          } else if (data.plainLyrics) {
+            return { text: data.plainLyrics, synced: false };
+          }
+        }
+        throw new Error("No lyrics from lrclib.net");
+      },
+    ];
+
     try {
-      // Try multiple lyrics APIs
-      const artist = encodeURIComponent(songToFetch.artist || "");
-      const title = encodeURIComponent(songToFetch.title || "");
-
-      // Option 1: lyrics.ovh (Free, no API key) - plain lyrics
-      let response = await fetch(`https://api.lyrics.ovh/v1/${artist}/${title}`);
-      
-      if (response.ok) {
-        const data = await response.json();
-        if (data.lyrics) {
-          setLyrics({
-            text: data.lyrics,
-            synced: false,
-          });
-          setLoadingLyrics(false);
-          return;
-        }
-      }
-
-      // Option 2: lrclib.net (Free, possible synced lyrics)
-      response = await fetch(
-        `https://lrclib.net/api/get?artist_name=${artist}&track_name=${title}`
-      );
-      
-      if (response.ok) {
-        const data = await response.json();
-        // lrclib returns plainLyrics and maybe syncedLyrics (LRC)
-        if (data.syncedLyrics) {
-          const parsed = parseLRC(data.syncedLyrics);
-          setLyrics({
-            text: data.plainLyrics || data.syncedLyrics,
-            synced: true,
-            syncedLyrics: parsed,
-          });
-          setLoadingLyrics(false);
-          return;
-        } else if (data.plainLyrics) {
-          setLyrics({
-            text: data.plainLyrics,
-            synced: false,
-          });
-          setLoadingLyrics(false);
-          return;
-        }
-      }
-
-      // No lyrics found
-      setLyricsError("Không tìm thấy lời bài hát");
-      setLoadingLyrics(false);
+      // Chạy song song, lấy kết quả đầu tiên thành công
+      const result = await Promise.any(lyricsAPIs.map(fn => fn()));
+      setLyrics(result);
     } catch (error) {
       console.log("Lyrics fetch error:", error);
-      setLyricsError("Lỗi khi tải lời bài hát");
+      setLyricsError("Không tìm thấy lời bài hát");
+    } finally {
       setLoadingLyrics(false);
     }
   };
+
 
   // Parse LRC format for synced lyrics
   const parseLRC = (lrcText) => {
     if (!lrcText) return [];
     const lines = lrcText.split('\n');
     const parsed = [];
-    
+
     lines.forEach(line => {
       // Support multiple time tags per line [mm:ss.xx][mm:ss.xx]text
       const timeTagRegex = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g;
@@ -243,52 +233,48 @@ export default function PlayerScreen({ route, navigation }) {
         }
       });
     });
-    
+
     return parsed.sort((a, b) => a.time - b.time);
   };
 
   // Get current lyrics line index
-  const getCurrentLyricsIndex = () => {
+  const getCurrentLyricsIndex = useCallback(() => {
     if (!lyrics?.synced || !lyrics.syncedLyrics || lyrics.syncedLyrics.length === 0) return -1;
-    
+
+    // Find the last line that should be playing now
+    let currentIdx = -1;
     for (let i = lyrics.syncedLyrics.length - 1; i >= 0; i--) {
       if (position >= lyrics.syncedLyrics[i].time) {
-        return i;
+        currentIdx = i;
+        break;
       }
     }
-    return -1;
-  };
+    return currentIdx;
+  }, [lyrics, position]);
 
-  // Auto-scroll effect: when position changes and lyrics are visible & synced
+  // Auto-scroll effect: when position changes and lyrics are synced
   useEffect(() => {
-    if (!showLyrics) return;
-    if (!lyrics?.synced || !lyrics.syncedLyrics) return;
+    if (!lyrics?.synced || !lyrics.syncedLyrics || lyrics.syncedLyrics.length === 0) return;
 
     const idx = getCurrentLyricsIndex();
     if (idx < 0) return;
 
-    // scroll to approx y
-    if (lyricsScrollRef.current && typeof lyricsScrollRef.current.scrollTo === 'function') {
-      const y = Math.max(0, idx * LINE_ESTIMATED_HEIGHT - (height * 0.25));
-      lyricsScrollRef.current.scrollTo({ y, animated: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [position, lyrics, showLyrics]);
+    // Smooth scroll to center the active line
+    if (lyricsScrollRef.current) {
+      // Use scrollTo for ScrollView
+      const yOffset = Math.max(0, (idx * LINE_ESTIMATED_HEIGHT) - 100);
 
-  const handleToggleLyrics = () => {
-    if (!showLyrics && !lyrics && !loadingLyrics) {
-      // fetch lyrics for currentSong
-      fetchLyrics(currentSong);
+      // Small delay to ensure smooth scrolling
+      setTimeout(() => {
+        if (lyricsScrollRef.current?.scrollTo) {
+          lyricsScrollRef.current.scrollTo({
+            y: yOffset,
+            animated: true
+          });
+        }
+      }, 100);
     }
-    setShowLyrics((v) => {
-      const newV = !v;
-      // if toggled on and lyrics not loaded, fetch
-      if (newV && !lyrics && !loadingLyrics) {
-        fetchLyrics(currentSong);
-      }
-      return newV;
-    });
-  };
+  }, [position, lyrics]);
 
   // Seek to a normalized value (seekTo expects fraction 0..1 in your context)
   const handleSeek = useCallback(async (value) => {
@@ -344,7 +330,7 @@ export default function PlayerScreen({ route, navigation }) {
 
     try {
       const message = `🎵 ${currentSong.title}\n👤 ${currentSong.artist}\n\n🎧 Nghe ngay: ${currentSong.link || 'https://www.deezer.com'}`;
-      
+
       const result = await Share.share({
         message: message,
         title: `Chia sẻ: ${currentSong.title}`,
@@ -414,10 +400,10 @@ export default function PlayerScreen({ route, navigation }) {
   // ========== PLAYLIST FUNCTIONS ==========
   const handleAddToPlaylist = useCallback((playlistName) => {
     if (!currentSong) return;
-    
+
     const success = addToPlaylist(playlistName, currentSong);
     setShowPlaylistModal(false);
-    
+
     if (success) {
       Alert.alert("✅ Thành công", `Đã thêm "${currentSong.title}" vào playlist "${playlistName}"`);
     } else {
@@ -432,7 +418,7 @@ export default function PlayerScreen({ route, navigation }) {
     }
 
     const success = createPlaylist(newPlaylistName.trim());
-    
+
     if (success) {
       addToPlaylist(newPlaylistName.trim(), currentSong);
       setShowNewPlaylistModal(false);
@@ -458,44 +444,52 @@ export default function PlayerScreen({ route, navigation }) {
     </TouchableOpacity>
   ), [playlists, handleAddToPlaylist]);
 
-  // Render synced lyrics
+  // Render synced lyrics - optimized for bottom section
   const renderSyncedLyrics = () => {
     if (!lyrics?.synced || !lyrics.syncedLyrics) return null;
-    
+
     const currentIndex = getCurrentLyricsIndex();
-    
+
     return (
       <ScrollView
         ref={lyricsScrollRef}
         style={styles.lyricsScroll}
         contentContainerStyle={styles.lyricsContent}
         showsVerticalScrollIndicator={false}
+        nestedScrollEnabled={true}
       >
-        {lyrics.syncedLyrics.map((line, index) => (
-          <TouchableOpacity
-            key={index}
-            onPress={() => handleSeekToMillis(line.time)}
-            activeOpacity={0.7}
-          >
-            <Text
-              style={[
-                styles.lyricsLine,
-                index === currentIndex && styles.lyricsLineActive,
-                index < currentIndex && styles.lyricsLinePast,
-              ]}
+        {lyrics.syncedLyrics.map((line, index) => {
+          const isActive = index === currentIndex;
+          const isPast = index < currentIndex;
+
+          return (
+            <TouchableOpacity
+              key={`${line.time}-${index}`}
+              onPress={() => handleSeekToMillis(line.time)}
+              activeOpacity={0.7}
             >
-              {line.text}
-            </Text>
-          </TouchableOpacity>
-        ))}
+              <Animated.Text
+                style={[
+                  styles.lyricsLine,
+                  isActive && styles.lyricsLineActive,
+                  isPast && styles.lyricsLinePast,
+                ]}
+              >
+                {line.text}
+              </Animated.Text>
+            </TouchableOpacity>
+          );
+        })}
+        {/* Add bottom padding for better scroll experience */}
+        <View style={{ height: 150 }} />
       </ScrollView>
     );
   };
 
-  // Render plain lyrics
+  // Render plain lyrics - optimized for bottom section
   const renderPlainLyrics = () => {
     if (!lyrics?.text) return null;
-    
+
     return (
       <ScrollView
         style={styles.lyricsScroll}
@@ -503,6 +497,7 @@ export default function PlayerScreen({ route, navigation }) {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.lyricsText}>{lyrics.text}</Text>
+        <View style={{ height: 60 }} />
       </ScrollView>
     );
   };
@@ -520,7 +515,7 @@ export default function PlayerScreen({ route, navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      {/* Header - Fixed */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} activeOpacity={0.7}>
           <Ionicons name="chevron-down" size={28} color="#fff" />
@@ -536,186 +531,174 @@ export default function PlayerScreen({ route, navigation }) {
         </TouchableOpacity>
       </View>
 
-      {/* Main Content */}
-      {!showLyrics ? (
-        <>
-          {/* Album Art with smooth transition */}
-          <View style={styles.albumContainer}>
-            <Animated.View 
-              style={[
-                styles.albumArt,
-                {
-                  opacity: imageLoaded ? imageOpacity : 0.6,
-                }
-              ]}
-            >
-              {/* Show previous image or placeholder while loading */}
-              {!imageLoaded && currentImageUri && (
-                <Image
-                  source={{ uri: currentImageUri }}
-                  style={[styles.albumArt, { position: 'absolute' }]}
-                />
-              )}
-              
-              {/* New image */}
+      {/* Scrollable Content */}
+      <ScrollView
+        style={styles.scrollContainer}
+        showsVerticalScrollIndicator={false}
+        bounces={true}
+      >
+        {/* Album Art with smooth transition */}
+        <View style={styles.albumContainer}>
+          <Animated.View
+            style={[
+              styles.albumArt,
+              {
+                opacity: imageLoaded ? imageOpacity : 0.6,
+              }
+            ]}
+          >
+            {/* Show previous image or placeholder while loading */}
+            {!imageLoaded && currentImageUri && (
               <Image
-                source={{ uri: currentSong.cover }}
-                style={styles.albumArt}
-                onLoad={() => setImageLoaded(true)}
-                onError={() => setImageLoaded(true)}
+                source={{ uri: currentImageUri }}
+                style={[styles.albumArt, { position: 'absolute' }]}
               />
-            </Animated.View>
-          </View>
+            )}
 
-          {/* Song Info */}
-          <View style={styles.songInfo}>
-            <Text style={styles.songTitle} numberOfLines={2}>
-              {currentSong.title}
-            </Text>
-            <Text style={styles.artistName} numberOfLines={1}>
-              {currentSong.artist}
-            </Text>
+            {/* New image */}
+            <Image
+              source={{ uri: currentSong.cover }}
+              style={styles.albumArt}
+              onLoad={() => setImageLoaded(true)}
+              onError={() => setImageLoaded(true)}
+            />
+          </Animated.View>
+        </View>
+
+        {/* Song Info */}
+        <View style={styles.songInfo}>
+          <Text style={styles.songTitle} numberOfLines={2}>
+            {currentSong.title}
+          </Text>
+          <Text style={styles.artistName} numberOfLines={1}>
+            {currentSong.artist}
+          </Text>
+        </View>
+
+        {/* Progress */}
+        <View style={styles.progressContainer}>
+          <Slider
+            style={styles.slider}
+            minimumValue={0}
+            maximumValue={1}
+            value={sliderValue}
+            onSlidingComplete={handleSeek}
+            minimumTrackTintColor="#1DB954"
+            maximumTrackTintColor="#404040"
+            thumbTintColor="#1DB954"
+            disabled={!duration}
+          />
+          <View style={styles.timeContainer}>
+            <Text style={styles.timeText}>{formattedPosition}</Text>
+            <Text style={styles.timeText}>{formattedDuration}</Text>
           </View>
-        </>
-      ) : (
-        /* Lyrics View */
-        <View style={styles.lyricsContainer}>
-          <View style={styles.lyricsSongInfo}>
-            <Image source={{ uri: currentSong.cover }} style={styles.lyricsAlbumArt} />
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.lyricsSongTitle} numberOfLines={1}>
-                {currentSong.title}
-              </Text>
-              <Text style={styles.lyricsArtistName} numberOfLines={1}>
-                {currentSong.artist}
-              </Text>
+        </View>
+
+        {/* Controls */}
+        <View style={styles.controlsContainer}>
+          <TouchableOpacity
+            onPress={toggleShuffleMode}
+            style={styles.smallControl}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="shuffle" size={24} color={shuffle ? "#1DB954" : "#aaa"} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={handlePlayPrevious}
+            style={styles.controlButton}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="play-skip-back" size={35} color="#fff" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={togglePlayPause}
+            style={styles.playButton}
+            activeOpacity={0.8}
+          >
+            <Ionicons name={isPlaying ? "pause" : "play"} size={35} color="#000" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={handlePlayNext}
+            style={styles.controlButton}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="play-skip-forward" size={35} color="#fff" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={toggleRepeatMode}
+            style={styles.smallControl}
+            activeOpacity={0.7}
+          >
+            <View style={styles.repeatContainer}>
+              <Ionicons name="repeat" size={24} color={repeat === "none" ? "#aaa" : "#1DB954"} />
+              {repeat === "one" && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>1</Text>
+                </View>
+              )}
             </View>
-          </View>
+          </TouchableOpacity>
+        </View>
+
+        {/* Volume */}
+        <View style={styles.volumeContainer}>
+          <Ionicons name="volume-low" size={20} color="#aaa" />
+          <Slider
+            style={{ flex: 1, marginHorizontal: 10 }}
+            minimumValue={0}
+            maximumValue={1}
+            value={localVolume}
+            onValueChange={handleVolumeChange}
+            minimumTrackTintColor="#1DB954"
+            maximumTrackTintColor="#404040"
+            thumbTintColor="#1DB954"
+          />
+          <Ionicons name="volume-high" size={20} color="#aaa" />
+        </View>
+
+        {/* Lyrics Section - Scrollable */}
+        <View style={styles.lyricsSection}>
+          {/* Synced Indicator */}
+          {lyrics?.synced && (
+            <View style={styles.syncedIndicator}>
+              <Ionicons name="musical-notes" size={14} color="#1DB954" />
+              <Text style={styles.syncedText}>Lời bài hát đồng bộ</Text>
+            </View>
+          )}
 
           {loadingLyrics ? (
             <View style={styles.lyricsLoading}>
-              <ActivityIndicator size="large" color="#1DB954" />
+              <ActivityIndicator size="small" color="#1DB954" />
               <Text style={styles.lyricsLoadingText}>Đang tải lời bài hát...</Text>
             </View>
           ) : lyricsError ? (
             <View style={styles.lyricsError}>
-              <Ionicons name="musical-note-outline" size={60} color="#666" />
+              <Ionicons name="musical-note-outline" size={32} color="#666" />
               <Text style={styles.lyricsErrorText}>{lyricsError}</Text>
               <TouchableOpacity
                 style={styles.retryButton}
                 onPress={() => fetchLyrics(currentSong)}
+                activeOpacity={0.7}
               >
                 <Text style={styles.retryButtonText}>Thử lại</Text>
               </TouchableOpacity>
             </View>
           ) : lyrics?.synced ? (
             renderSyncedLyrics()
-          ) : (
+          ) : lyrics?.text ? (
             renderPlainLyrics()
+          ) : (
+            <View style={styles.lyricsEmpty}>
+              <Ionicons name="musical-note-outline" size={32} color="#666" />
+              <Text style={styles.lyricsEmptyText}>Không có lời bài hát</Text>
+            </View>
           )}
         </View>
-      )}
-
-      {/* Lyrics Toggle Button */}
-      <TouchableOpacity 
-        style={styles.lyricsToggle}
-        onPress={handleToggleLyrics}
-        activeOpacity={0.7}
-      >
-        <Ionicons 
-          name={showLyrics ? "musical-note" : "musical-note-outline"} 
-          size={20} 
-          color={showLyrics ? "#1DB954" : "#fff"} 
-        />
-        <Text style={[styles.lyricsToggleText, showLyrics && { color: "#1DB954" }]}>
-          {showLyrics ? "Ẩn lời" : "Lời bài hát"}
-        </Text>
-      </TouchableOpacity>
-
-      {/* Progress */}
-      <View style={styles.progressContainer}>
-        <Slider
-          style={styles.slider}
-          minimumValue={0}
-          maximumValue={1}
-          value={sliderValue}
-          onSlidingComplete={handleSeek}
-          minimumTrackTintColor="#1DB954"
-          maximumTrackTintColor="#404040"
-          thumbTintColor="#1DB954"
-          disabled={!duration}
-        />
-        <View style={styles.timeContainer}>
-          <Text style={styles.timeText}>{formattedPosition}</Text>
-          <Text style={styles.timeText}>{formattedDuration}</Text>
-        </View>
-      </View>
-
-      {/* Controls */}
-      <View style={styles.controlsContainer}>
-        <TouchableOpacity 
-          onPress={toggleShuffleMode} 
-          style={styles.smallControl}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="shuffle" size={24} color={shuffle ? "#1DB954" : "#aaa"} />
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          onPress={handlePlayPrevious} 
-          style={styles.controlButton}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="play-skip-back" size={35} color="#fff" />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          onPress={togglePlayPause}
-          style={styles.playButton}
-          activeOpacity={0.8}
-        >
-          <Ionicons name={isPlaying ? "pause" : "play"} size={35} color="#000" />
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          onPress={handlePlayNext} 
-          style={styles.controlButton}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="play-skip-forward" size={35} color="#fff" />
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          onPress={toggleRepeatMode} 
-          style={styles.smallControl}
-          activeOpacity={0.7}
-        >
-          <View style={styles.repeatContainer}>
-            <Ionicons name="repeat" size={24} color={repeat === "none" ? "#aaa" : "#1DB954"} />
-            {repeat === "one" && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>1</Text>
-              </View>
-            )}
-          </View>
-        </TouchableOpacity>
-      </View>
-
-      {/* Volume */}
-      <View style={styles.volumeContainer}>
-        <Ionicons name="volume-low" size={20} color="#aaa" />
-        <Slider
-          style={{ flex: 1, marginHorizontal: 10 }}
-          minimumValue={0}
-          maximumValue={1}
-          value={localVolume}
-          onValueChange={handleVolumeChange}
-          minimumTrackTintColor="#1DB954"
-          maximumTrackTintColor="#404040"
-          thumbTintColor="#1DB954"
-        />
-        <Ionicons name="volume-high" size={20} color="#aaa" />
-      </View>
+      </ScrollView>
 
       {/* Bottom Sheet Menu */}
       <Modal
@@ -724,13 +707,13 @@ export default function PlayerScreen({ route, navigation }) {
         animationType="slide"
         onRequestClose={() => setShowBottomSheet(false)}
       >
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.bottomSheetOverlay}
           activeOpacity={1}
           onPress={() => setShowBottomSheet(false)}
         >
-          <TouchableOpacity 
-            activeOpacity={1} 
+          <TouchableOpacity
+            activeOpacity={1}
             style={styles.bottomSheetContainer}
             onPress={(e) => e.stopPropagation()}
           >
@@ -749,7 +732,7 @@ export default function PlayerScreen({ route, navigation }) {
             <View style={styles.divider} />
 
             <View style={styles.menuContainer}>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.menuItem}
                 onPress={() => {
                   handleToggleFavorite();
@@ -757,17 +740,17 @@ export default function PlayerScreen({ route, navigation }) {
                 }}
                 activeOpacity={0.7}
               >
-                <Ionicons 
-                  name={isFavorite(currentSong.id) ? "heart" : "heart-outline"} 
-                  size={24} 
-                  color={isFavorite(currentSong.id) ? "#1DB954" : "#fff"} 
+                <Ionicons
+                  name={isFavorite(currentSong.id) ? "heart" : "heart-outline"}
+                  size={24}
+                  color={isFavorite(currentSong.id) ? "#1DB954" : "#fff"}
                 />
                 <Text style={styles.menuText}>
                   {isFavorite(currentSong.id) ? "Xóa khỏi yêu thích" : "Thêm vào yêu thích"}
                 </Text>
               </TouchableOpacity>
 
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.menuItem}
                 onPress={() => {
                   setShowBottomSheet(false);
@@ -779,7 +762,7 @@ export default function PlayerScreen({ route, navigation }) {
                 <Text style={styles.menuText}>Thêm vào playlist</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.menuItem}
                 onPress={handleShare}
                 activeOpacity={0.7}
@@ -788,16 +771,16 @@ export default function PlayerScreen({ route, navigation }) {
                 <Text style={styles.menuText}>Chia sẻ</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.menuItem}
                 onPress={handleDownload}
                 disabled={isDownloading}
                 activeOpacity={0.7}
               >
-                <Ionicons 
-                  name={isDownloading ? "hourglass" : "download"} 
-                  size={24} 
-                  color="#fff" 
+                <Ionicons
+                  name={isDownloading ? "hourglass" : "download"}
+                  size={24}
+                  color="#fff"
                 />
                 <Text style={styles.menuText}>
                   {isDownloading ? "Đang tải..." : "Tải xuống"}
@@ -805,7 +788,7 @@ export default function PlayerScreen({ route, navigation }) {
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.closeButton}
               onPress={() => setShowBottomSheet(false)}
               activeOpacity={0.7}
@@ -821,7 +804,7 @@ export default function PlayerScreen({ route, navigation }) {
         <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <Text style={styles.modalTitle}>Thêm vào Playlist</Text>
-            
+
             {playlistNames.length === 0 ? (
               <View style={{ alignItems: "center", marginVertical: 20 }}>
                 <Text style={{ color: "#aaa", marginBottom: 10 }}>
@@ -923,13 +906,18 @@ function formatTime(ms) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#121212", paddingHorizontal: 20 },
+  container: { flex: 1, backgroundColor: "#121212" },
+  scrollContainer: {
+    flex: 1,
+    paddingHorizontal: 20,
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     marginTop: 50,
     marginBottom: 20,
+    paddingHorizontal: 20,
   },
   headerCenter: {
     position: "absolute",
@@ -950,109 +938,109 @@ const styles = StyleSheet.create({
   songInfo: { alignItems: "center", marginBottom: 20 },
   songTitle: { color: "#fff", fontSize: 20, fontWeight: "700", textAlign: "center" },
   artistName: { color: "#aaa", fontSize: 16, marginTop: 4 },
-  
-  // Lyrics Styles
-  lyricsContainer: {
-    flex: 1,
-    marginTop: 10,
+
+  // Lyrics Styles - Bottom Section
+  lyricsSection: {
+    minHeight: 400,
+    marginTop: 15,
+    marginBottom: 20,
+    backgroundColor: "#1a1a1a",
+    borderRadius: 12,
+    overflow: "hidden",
   },
-  lyricsSongInfo: {
+  syncedIndicator: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 20,
-    paddingBottom: 15,
+    justifyContent: "center",
+    paddingVertical: 8,
+    backgroundColor: "rgba(29, 185, 84, 0.1)",
     borderBottomWidth: 1,
-    borderBottomColor: "#333",
+    borderBottomColor: "#1DB954",
   },
-  lyricsAlbumArt: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    backgroundColor: "#333",
-  },
-  lyricsSongTitle: {
-    color: "#fff",
-    fontSize: 16,
+  syncedText: {
+    color: "#1DB954",
+    fontSize: 12,
     fontWeight: "600",
-  },
-  lyricsArtistName: {
-    color: "#aaa",
-    fontSize: 14,
-    marginTop: 4,
+    marginLeft: 6,
   },
   lyricsScroll: {
-    flex: 1,
+    maxHeight: 350,
   },
   lyricsContent: {
-    paddingVertical: 20,
-    paddingHorizontal: 10,
+    paddingVertical: 40,
+    paddingHorizontal: 20,
   },
   lyricsText: {
-    color: "#fff",
-    fontSize: 16,
-    lineHeight: 28,
+    color: "#aaa",
+    fontSize: 14,
+    lineHeight: 24,
     textAlign: "center",
   },
   lyricsLine: {
     color: "#666",
-    fontSize: 18,
-    lineHeight: 36,
+    fontSize: 16,
+    lineHeight: 32,
     textAlign: "center",
-    marginVertical: 8,
+    marginVertical: 14,
+    paddingHorizontal: 10,
+    transition: "all 0.3s ease",
   },
   lyricsLineActive: {
     color: "#1DB954",
     fontSize: 22,
     fontWeight: "700",
+    transform: [{ scale: 1.08 }],
   },
   lyricsLinePast: {
-    color: "#888",
+    color: "#444",
+    fontSize: 15,
   },
   lyricsLoading: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
+    paddingVertical: 30,
   },
   lyricsLoadingText: {
     color: "#aaa",
-    marginTop: 15,
-    fontSize: 14,
+    marginTop: 10,
+    fontSize: 13,
   },
   lyricsError: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
+    paddingVertical: 30,
   },
   lyricsErrorText: {
     color: "#aaa",
-    marginTop: 15,
-    fontSize: 14,
+    marginTop: 10,
+    fontSize: 13,
+  },
+  lyricsEmpty: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 30,
+  },
+  lyricsEmptyText: {
+    color: "#666",
+    marginTop: 10,
+    fontSize: 13,
   },
   retryButton: {
-    marginTop: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
+    marginTop: 15,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
     backgroundColor: "#1DB954",
-    borderRadius: 20,
+    borderRadius: 16,
   },
   retryButtonText: {
     color: "#fff",
     fontWeight: "600",
+    fontSize: 13,
   },
-  lyricsToggle: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 8,
-    marginBottom: 5,
-  },
-  lyricsToggleText: {
-    color: "#fff",
-    marginLeft: 8,
-    fontSize: 14,
-    fontWeight: "500",
-  },
-  
+
   progressContainer: { marginHorizontal: 10 },
   slider: { width: "100%", height: 40 },
   timeContainer: { flexDirection: "row", justifyContent: "space-between" },
@@ -1177,18 +1165,18 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  modalBox: { 
-    backgroundColor: "#222", 
-    padding: 20, 
-    borderRadius: 12, 
-    width: "80%", 
-    maxHeight: "70%" 
+  modalBox: {
+    backgroundColor: "#222",
+    padding: 20,
+    borderRadius: 12,
+    width: "80%",
+    maxHeight: "70%"
   },
-  modalTitle: { 
-    color: "#fff", 
-    fontSize: 18, 
-    fontWeight: "600", 
-    marginBottom: 12 
+  modalTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "600",
+    marginBottom: 12
   },
   playlistItem: {
     flexDirection: "row",
@@ -1206,10 +1194,10 @@ const styles = StyleSheet.create({
     color: "#666",
     fontSize: 12,
   },
-  modalClose: { 
-    marginTop: 15, 
-    alignItems: "center", 
-    padding: 10 
+  modalClose: {
+    marginTop: 15,
+    alignItems: "center",
+    padding: 10
   },
   newPlaylistBtn: {
     flexDirection: "row",
