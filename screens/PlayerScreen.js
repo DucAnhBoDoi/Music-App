@@ -1,4 +1,4 @@
-// screens/PlayerScreen.js - WITH LYRICS BOTTOM LAYOUT
+// screens/PlayerScreen.js - FULLY OPTIMIZED WITH FAST LYRICS LOADING
 import React, { useState, useEffect, useContext, useRef, useMemo, useCallback } from "react";
 import {
   View,
@@ -67,8 +67,12 @@ export default function PlayerScreen({ route, navigation }) {
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [isDownloading, setIsDownloading] = useState(false);
 
+  // ========== DOWNLOAD FORMAT STATE ==========
+const [showDownloadFormatModal, setShowDownloadFormatModal] = useState(false);
+const [selectedFormat, setSelectedFormat] = useState("mp3"); // mặc định mp3
+
   // ========== LYRICS STATE ==========
-  const [lyrics, setLyrics] = useState(null); // { text, synced, syncedLyrics: [{time, text}] }
+  const [lyrics, setLyrics] = useState(null);
   const [loadingLyrics, setLoadingLyrics] = useState(false);
   const [lyricsError, setLyricsError] = useState(null);
 
@@ -79,6 +83,7 @@ export default function PlayerScreen({ route, navigation }) {
 
   // Scroll ref for lyrics auto-scroll
   const lyricsScrollRef = useRef(null);
+  const scrollTimerRef = useRef(null);
 
   // Estimated single-line height for smooth scrolling
   const LINE_ESTIMATED_HEIGHT = 60;
@@ -93,12 +98,131 @@ export default function PlayerScreen({ route, navigation }) {
     return duration ? position / duration : 0;
   }, [position, duration]);
 
+  // ========== PARSE LRC - OPTIMIZED ==========
+  const parseLRC = useCallback((lrcText) => {
+    if (!lrcText) return [];
+
+    const lines = lrcText.split('\n');
+    const parsed = [];
+    const timeTagRegex = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g;
+
+    for (const line of lines) {
+      const text = line.replace(timeTagRegex, '').trim();
+      if (!text) continue;
+
+      let match;
+      timeTagRegex.lastIndex = 0; // Reset regex
+
+      while ((match = timeTagRegex.exec(line)) !== null) {
+        const minutes = parseInt(match[1], 10);
+        const seconds = parseInt(match[2], 10);
+        const msPart = match[3] ? match[3].padEnd(3, '0') : '000';
+        const milliseconds = parseInt(msPart, 10);
+        const timeMs = (minutes * 60 + seconds) * 1000 + milliseconds;
+
+        parsed.push({ time: timeMs, text });
+      }
+    }
+
+    return parsed.sort((a, b) => a.time - b.time);
+  }, []);
+
+  // ========== LYRICS FETCHING - SUPER FAST ==========
+  const fetchLyrics = useCallback(async (songToFetch) => {
+    if (!songToFetch) {
+      setLoadingLyrics(false);
+      return;
+    }
+
+    const artist = encodeURIComponent(songToFetch.artist || "");
+    const title = encodeURIComponent(songToFetch.title || "");
+
+    console.log(`🎵 Fetching lyrics for: ${songToFetch.artist} - ${songToFetch.title}`);
+
+    // Thử lrclib.net trước (API tốt nhất)
+    try {
+      console.log('⏳ Trying lrclib.net...');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+      const res = await fetch(
+        `https://lrclib.net/api/get?artist_name=${artist}&track_name=${title}`,
+        {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+        }
+      );
+
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const data = await res.json();
+        console.log('✅ lrclib.net success!', data);
+
+        if (data.syncedLyrics) {
+          const result = {
+            text: data.plainLyrics || data.syncedLyrics,
+            synced: true,
+            syncedLyrics: parseLRC(data.syncedLyrics),
+          };
+          setLyrics(result);
+          setLyricsError(null);
+          setLoadingLyrics(false);
+          return;
+        } else if (data.plainLyrics) {
+          setLyrics({ text: data.plainLyrics, synced: false });
+          setLyricsError(null);
+          setLoadingLyrics(false);
+          return;
+        }
+      }
+    } catch (error) {
+      console.log('❌ lrclib.net failed:', error.message);
+    }
+
+    // Thử lyrics.ovh nếu lrclib thất bại
+    try {
+      console.log('⏳ Trying lyrics.ovh...');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+      const res = await fetch(
+        `https://api.lyrics.ovh/v1/${artist}/${title}`,
+        {
+          method: 'GET',
+          signal: controller.signal,
+        }
+      );
+
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const data = await res.json();
+        console.log('✅ lyrics.ovh success!');
+
+        if (data.lyrics) {
+          setLyrics({ text: data.lyrics, synced: false });
+          setLyricsError(null);
+          setLoadingLyrics(false);
+          return;
+        }
+      }
+    } catch (error) {
+      console.log('❌ lyrics.ovh failed:', error.message);
+    }
+
+    // Tất cả APIs đều thất bại
+    console.log('❌ All APIs failed');
+    setLyricsError("Không tìm thấy lời bài hát");
+    setLoadingLyrics(false);
+  }, [parseLRC]);
+
   // ========== IMAGE PRELOADING ==========
   useEffect(() => {
     if (currentSong?.cover && currentSong.cover !== currentImageUri) {
       setImageLoaded(false);
 
-      // Preload image
       Image.prefetch(currentSong.cover)
         .then(() => {
           setCurrentImageUri(currentSong.cover);
@@ -109,11 +233,12 @@ export default function PlayerScreen({ route, navigation }) {
           setImageLoaded(true);
         });
     }
-  }, [currentSong?.cover]);
+  }, [currentSong?.cover, currentImageUri]);
 
-  // ========== SMOOTH TRANSITION EFFECT ==========
+  // ========== SMOOTH TRANSITION EFFECT - FIX ==========
   useEffect(() => {
     if (currentSong && prevSongId.current !== currentSong.id) {
+      console.log('🔄 Song changed to:', currentSong.title);
       prevSongId.current = currentSong.id;
 
       // Smooth cross-fade when image changes
@@ -121,12 +246,25 @@ export default function PlayerScreen({ route, navigation }) {
         setImageLoaded(false);
       }
 
-      // Auto-fetch lyrics when song changes
+      // Reset and fetch new lyrics
+      setLyrics(null);
+      setLyricsError(null);
+      setLoadingLyrics(true);
+      fetchLyrics(currentSong);
+    }
+  }, [currentSong?.id, currentImageUri, fetchLyrics]);
+
+  // ========== INITIAL LYRICS LOAD - FIX ==========
+  useEffect(() => {
+    // Load lyrics immediately when component mounts
+    if (currentSong) {
+      console.log('🎬 Component mounted, loading lyrics for:', currentSong.title);
+      setLoadingLyrics(true);
       setLyrics(null);
       setLyricsError(null);
       fetchLyrics(currentSong);
     }
-  }, [currentSong?.id]);
+  }, []);
 
   // Animate when image loads
   useEffect(() => {
@@ -137,7 +275,7 @@ export default function PlayerScreen({ route, navigation }) {
         useNativeDriver: true,
       }).start();
     }
-  }, [imageLoaded]);
+  }, [imageLoaded, imageOpacity]);
 
   // ========== INIT ==========
   useEffect(() => {
@@ -147,147 +285,71 @@ export default function PlayerScreen({ route, navigation }) {
         index: paramIndex,
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ========== LYRICS FETCHING ==========
-  // ========== LYRICS FETCHING OPTIMIZED ==========
-  const fetchLyrics = async (songToFetch) => {
-    if (!songToFetch) return;
-
-    setLoadingLyrics(true);
-    setLyricsError(null);
-
-    const artist = encodeURIComponent(songToFetch.artist || "");
-    const title = encodeURIComponent(songToFetch.title || "");
-
-    const lyricsAPIs = [
-      // lyrics.ovh
-      async () => {
-        const res = await fetch(`https://api.lyrics.ovh/v1/${artist}/${title}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.lyrics) {
-            return { text: data.lyrics, synced: false };
-          }
-        }
-        throw new Error("No lyrics from lyrics.ovh");
-      },
-      // lrclib.net
-      async () => {
-        const res = await fetch(
-          `https://lrclib.net/api/get?artist_name=${artist}&track_name=${title}`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          if (data.syncedLyrics) {
-            return {
-              text: data.plainLyrics || data.syncedLyrics,
-              synced: true,
-              syncedLyrics: parseLRC(data.syncedLyrics),
-            };
-          } else if (data.plainLyrics) {
-            return { text: data.plainLyrics, synced: false };
-          }
-        }
-        throw new Error("No lyrics from lrclib.net");
-      },
-    ];
-
-    try {
-      // Chạy song song, lấy kết quả đầu tiên thành công
-      const result = await Promise.any(lyricsAPIs.map(fn => fn()));
-      setLyrics(result);
-    } catch (error) {
-      console.log("Lyrics fetch error:", error);
-      setLyricsError("Không tìm thấy lời bài hát");
-    } finally {
-      setLoadingLyrics(false);
-    }
-  };
-
-
-  // Parse LRC format for synced lyrics
-  const parseLRC = (lrcText) => {
-    if (!lrcText) return [];
-    const lines = lrcText.split('\n');
-    const parsed = [];
-
-    lines.forEach(line => {
-      // Support multiple time tags per line [mm:ss.xx][mm:ss.xx]text
-      const timeTagRegex = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g;
-      let match;
-      const text = line.replace(timeTagRegex, '').trim();
-      const times = [];
-      while ((match = timeTagRegex.exec(line)) !== null) {
-        const minutes = parseInt(match[1], 10);
-        const seconds = parseInt(match[2], 10);
-        const msPart = match[3] ? match[3].padEnd(3, '0') : '000';
-        const milliseconds = parseInt(msPart, 10);
-        const timeMs = (minutes * 60 + seconds) * 1000 + milliseconds;
-        times.push(timeMs);
-      }
-      times.forEach(t => {
-        if (text) {
-          parsed.push({ time: t, text });
-        }
-      });
-    });
-
-    return parsed.sort((a, b) => a.time - b.time);
-  };
-
-  // Get current lyrics line index
+  // Get current lyrics line index - OPTIMIZED
   const getCurrentLyricsIndex = useCallback(() => {
     if (!lyrics?.syncedLyrics || lyrics.syncedLyrics.length === 0) return -1;
 
+    // Binary search for better performance
+    let left = 0;
+    let right = lyrics.syncedLyrics.length - 1;
+    let result = -1;
 
-    // Find the last line that should be playing now
-    let currentIdx = -1;
-    for (let i = lyrics.syncedLyrics.length - 1; i >= 0; i--) {
-      if (position >= lyrics.syncedLyrics[i].time) {
-        currentIdx = i;
-        break;
+    while (left <= right) {
+      const mid = Math.floor((left + right) / 2);
+      if (lyrics.syncedLyrics[mid].time <= position) {
+        result = mid;
+        left = mid + 1;
+      } else {
+        right = mid - 1;
       }
     }
-    return currentIdx;
-  }, [lyrics, position]);
 
-  // Auto-scroll effect: when position changes and lyrics are synced
+    return result;
+  }, [lyrics?.syncedLyrics, position]);
+
+  // Auto-scroll effect - OPTIMIZED WITH DEBOUNCE
   useEffect(() => {
-    if (!lyrics?.syncedLyrics || lyrics.syncedLyrics.length === 0) return;
+    if (!lyrics?.syncedLyrics || lyrics.syncedLyrics.length === 0 || !isPlaying) return;
 
     const idx = getCurrentLyricsIndex();
     if (idx < 0) return;
 
-    // Smooth scroll to center the active line
-    if (lyricsScrollRef.current) {
-      // Use scrollTo for ScrollView
-      const yOffset = Math.max(0, (idx * LINE_ESTIMATED_HEIGHT) - 100);
-
-      // Small delay to ensure smooth scrolling
-      setTimeout(() => {
-        if (lyricsScrollRef.current?.scrollTo) {
-          lyricsScrollRef.current.scrollTo({
-            y: yOffset,
-            animated: true
-          });
-        }
-      }, 100);
+    // Clear previous timer
+    if (scrollTimerRef.current) {
+      clearTimeout(scrollTimerRef.current);
     }
-  }, [position, lyrics]);
 
-  // Seek to a normalized value (seekTo expects fraction 0..1 in your context)
+    // Debounce scroll to avoid too many updates
+    scrollTimerRef.current = setTimeout(() => {
+      if (lyricsScrollRef.current?.scrollTo) {
+        const yOffset = Math.max(0, (idx * LINE_ESTIMATED_HEIGHT) - 100);
+        lyricsScrollRef.current.scrollTo({
+          y: yOffset,
+          animated: true
+        });
+      }
+    }, 100);
+
+    return () => {
+      if (scrollTimerRef.current) {
+        clearTimeout(scrollTimerRef.current);
+      }
+    };
+  }, [getCurrentLyricsIndex(), lyrics?.syncedLyrics, isPlaying]);
+
+  // Seek to a normalized value
   const handleSeek = useCallback(async (value) => {
     if (!duration) return;
     try {
-      await seekTo(value); // value is 0..1 as used elsewhere in your code
+      await seekTo(value);
     } catch (e) {
       console.log("seek error", e);
     }
   }, [seekTo, duration]);
 
-  // Seek to a time in ms (from lyrics). Convert to fraction.
+  // Seek to a time in ms (from lyrics)
   const handleSeekToMillis = useCallback(async (ms) => {
     if (!duration || !seekTo) return;
     const fraction = Math.max(0, Math.min(1, ms / duration));
@@ -316,7 +378,6 @@ export default function PlayerScreen({ route, navigation }) {
     toggleFavorite(currentSong);
   }, [currentSong, toggleFavorite]);
 
-  // Quick navigation without affecting album art
   const handlePlayNext = useCallback(() => {
     playNext();
   }, [playNext]);
@@ -351,29 +412,42 @@ export default function PlayerScreen({ route, navigation }) {
   }, [currentSong]);
 
   // ========== DOWNLOAD FUNCTION ==========
-  const handleDownload = useCallback(async () => {
+  const handleDownload = useCallback(() => {
     if (!currentSong || !currentSong.preview) {
       Alert.alert('❌ Lỗi', 'Không có link tải về');
       return;
     }
 
+    // Mở modal chọn định dạng
+    setShowDownloadFormatModal(true);
+  }, [currentSong]);
+
+  const downloadFileWithFormat = useCallback(async (format) => {
+    if (!currentSong || !currentSong.preview) return;
+
     try {
+      setIsDownloading(true);
+      setShowDownloadFormatModal(false);
+      setShowBottomSheet(false);
+
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('⚠️ Cần quyền truy cập', 'Vui lòng cấp quyền truy cập thư viện để tải nhạc');
+        setIsDownloading(false);
         return;
       }
 
-      setIsDownloading(true);
-      setShowBottomSheet(false);
+      // Chuẩn hóa URL nếu server hỗ trợ
+      let downloadUrl = currentSong.preview;
+      if (!downloadUrl.endsWith(`.${format}`)) {
+        downloadUrl = downloadUrl.replace(/\.\w+($|\?)/, `.${format}$1`);
+      }
 
-      const fileName = `${currentSong.title.replace(/[^a-z0-9]/gi, '_')}.mp3`;
+      const fileName = `${currentSong.title.replace(/[^a-z0-9]/gi, '_')}.${format}`;
       const fileUri = FileSystem.documentDirectory + fileName;
 
-      Alert.alert('⏳ Đang tải...', 'Vui lòng đợi');
-
       const downloadResumable = FileSystem.createDownloadResumable(
-        currentSong.preview,
+        downloadUrl,
         fileUri,
         {},
         (downloadProgress) => {
@@ -388,15 +462,16 @@ export default function PlayerScreen({ route, navigation }) {
       setIsDownloading(false);
       Alert.alert(
         '✅ Tải xuống thành công!',
-        `Bài hát "${currentSong.title}" đã được lưu vào thư viện của bạn`,
+        `Bài hát "${currentSong.title}" đã được lưu vào thư viện (${format.toUpperCase()})`,
         [{ text: 'OK' }]
       );
     } catch (error) {
       setIsDownloading(false);
       console.log('Download error:', error);
-      Alert.alert('❌ Lỗi', 'Không thể tải bài hát. Đây là bản preview 30s nên có thể không hỗ trợ tải về.');
+      Alert.alert('❌ Lỗi', 'Không thể tải bài hát. Đây có thể là bản preview 30s.');
     }
   }, [currentSong]);
+
 
   // ========== PLAYLIST FUNCTIONS ==========
   const handleAddToPlaylist = useCallback((playlistName) => {
@@ -445,8 +520,8 @@ export default function PlayerScreen({ route, navigation }) {
     </TouchableOpacity>
   ), [playlists, handleAddToPlaylist]);
 
-  // Render synced lyrics - optimized for bottom section
-  const renderSyncedLyrics = () => {
+  // Render synced lyrics - OPTIMIZED
+  const renderSyncedLyrics = useCallback(() => {
     if (!lyrics?.synced || !lyrics.syncedLyrics) return null;
 
     const currentIndex = getCurrentLyricsIndex();
@@ -459,24 +534,33 @@ export default function PlayerScreen({ route, navigation }) {
         showsVerticalScrollIndicator={false}
         nestedScrollEnabled={true}
       >
-        {lyrics.syncedLyrics.map((line, index) => (
-          <TouchableOpacity
-            key={`${line.time}-${index}`}
-            onPress={() => handleSeekToMillis(line.time)}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.lyricsLine}>{line.text}</Text>
-          </TouchableOpacity>
-        ))}
+        {lyrics.syncedLyrics.map((line, index) => {
+          const isActive = index === currentIndex;
+          return (
+            <TouchableOpacity
+              key={`${line.time}-${index}`}
+              onPress={() => handleSeekToMillis(line.time)}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.lyricsLine,
+                  isActive && styles.lyricsLineActive
+                ]}
+              >
+                {line.text}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
 
-        {/* Add bottom padding for better scroll experience */}
         <View style={{ height: 150 }} />
       </ScrollView>
     );
-  };
+  }, [lyrics, getCurrentLyricsIndex, handleSeekToMillis]);
 
-  // Render plain lyrics - optimized for bottom section
-  const renderPlainLyrics = () => {
+  // Render plain lyrics
+  const renderPlainLyrics = useCallback(() => {
     if (!lyrics?.text) return null;
 
     return (
@@ -489,7 +573,7 @@ export default function PlayerScreen({ route, navigation }) {
         <View style={{ height: 60 }} />
       </ScrollView>
     );
-  };
+  }, [lyrics?.text]);
 
   if (!currentSong) {
     return (
@@ -536,7 +620,6 @@ export default function PlayerScreen({ route, navigation }) {
               }
             ]}
           >
-            {/* Show previous image or placeholder while loading */}
             {!imageLoaded && currentImageUri && (
               <Image
                 source={{ uri: currentImageUri }}
@@ -544,7 +627,6 @@ export default function PlayerScreen({ route, navigation }) {
               />
             )}
 
-            {/* New image */}
             <Image
               source={{ uri: currentSong.cover }}
               style={styles.albumArt}
@@ -651,7 +733,6 @@ export default function PlayerScreen({ route, navigation }) {
 
         {/* Lyrics Section - Scrollable */}
         <View style={styles.lyricsSection}>
-          {/* Synced Indicator */}
           {lyrics?.synced && (
             <View style={styles.syncedIndicator}>
               <Ionicons name="musical-notes" size={14} color="#1DB954" />
@@ -661,7 +742,7 @@ export default function PlayerScreen({ route, navigation }) {
 
           {loadingLyrics ? (
             <View style={styles.lyricsLoading}>
-              <ActivityIndicator size="small" color="#1DB954" />
+              <ActivityIndicator size="large" color="#1DB954" />
               <Text style={styles.lyricsLoadingText}>Đang tải lời bài hát...</Text>
             </View>
           ) : lyricsError ? (
@@ -670,7 +751,11 @@ export default function PlayerScreen({ route, navigation }) {
               <Text style={styles.lyricsErrorText}>{lyricsError}</Text>
               <TouchableOpacity
                 style={styles.retryButton}
-                onPress={() => fetchLyrics(currentSong)}
+                onPress={() => {
+                  setLoadingLyrics(true);
+                  setLyricsError(null);
+                  fetchLyrics(currentSong);
+                }}
                 activeOpacity={0.7}
               >
                 <Text style={styles.retryButtonText}>Thử lại</Text>
@@ -882,8 +967,51 @@ export default function PlayerScreen({ route, navigation }) {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={showDownloadFormatModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Chọn định dạng tải xuống</Text>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginTop: 20 }}>
+              {["mp3", "wav"].map((fmt) => (
+                <TouchableOpacity
+                  key={fmt}
+                  style={[
+                    styles.modalBtn,
+                    { flex: 1, marginHorizontal: 5, backgroundColor: selectedFormat === fmt ? "#1DB954" : "#444" }
+                  ]}
+                  onPress={() => setSelectedFormat(fmt)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "600", textTransform: 'uppercase' }}>{fmt}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={{ flexDirection: "row", marginTop: 20, gap: 10 }}>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: "#444", flex: 1 }]}
+                onPress={() => setShowDownloadFormatModal(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={{ color: "#fff" }}>Hủy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: "#1DB954", flex: 1 }]}
+                onPress={() => downloadFileWithFormat(selectedFormat)}
+                activeOpacity={0.7}
+              >
+                <Text style={{ color: "#fff", fontWeight: "600" }}>Tải xuống</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </View>
   );
+
 }
 
 // Helper function
@@ -972,52 +1100,60 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginVertical: 14,
     paddingHorizontal: 10,
-    transition: "all 0.3s ease",
+  },
+  lyricsLineActive: {
+    color: "#1DB954",
+    fontWeight: "700",
+    fontSize: 18,
+    transform: [{ scale: 1.05 }],
   },
   lyricsLoading: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    paddingVertical: 30,
+    paddingVertical: 40,
+    minHeight: 200,
   },
   lyricsLoadingText: {
     color: "#aaa",
-    marginTop: 10,
-    fontSize: 13,
+    marginTop: 15,
+    fontSize: 14,
   },
   lyricsError: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    paddingVertical: 30,
+    paddingVertical: 40,
+    minHeight: 200,
   },
   lyricsErrorText: {
     color: "#aaa",
     marginTop: 10,
-    fontSize: 13,
+    fontSize: 14,
   },
   lyricsEmpty: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    paddingVertical: 30,
+    paddingVertical: 40,
+    minHeight: 200,
   },
   lyricsEmptyText: {
     color: "#666",
     marginTop: 10,
-    fontSize: 13,
+    fontSize: 14,
   },
   retryButton: {
     marginTop: 15,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
     backgroundColor: "#1DB954",
-    borderRadius: 16,
+    borderRadius: 20,
   },
   retryButtonText: {
     color: "#fff",
     fontWeight: "600",
-    fontSize: 13,
+    fontSize: 14,
   },
 
   progressContainer: { marginHorizontal: 10 },
@@ -1172,11 +1308,6 @@ const styles = StyleSheet.create({
   playlistItemCount: {
     color: "#666",
     fontSize: 12,
-  },
-  modalClose: {
-    marginTop: 15,
-    alignItems: "center",
-    padding: 10
   },
   newPlaylistBtn: {
     flexDirection: "row",
